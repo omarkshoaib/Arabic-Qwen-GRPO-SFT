@@ -135,6 +135,70 @@ def reward_question_words_not_in_answer(completions, prompts, question_words, pe
         scores.append(penalty)
     return scores
 
+def reward_think_answer_tags(completions, think_tag_pair=("<think>", "</think>"), answer_tag_pair=("<answer>", "</answer>"), reward_value=1.0, penalty_value=-1.0, order_penalty=-0.5):
+    """
+    Rewards completions that correctly use <think>...</think> and <answer>...</answer> tags in order.
+    - reward_value: given if both tags are present, complete, and in order.
+    - penalty_value: given if a tag is opened but not closed, or if a pair is missing.
+    - order_penalty: additional penalty if <answer> appears before <think>.
+    """
+    scores = []
+    think_open, think_close = think_tag_pair
+    answer_open, answer_close = answer_tag_pair
+
+    for comp in completions:
+        score = 0
+        think_present_complete = False
+        answer_present_complete = False
+        think_start_idx, think_end_idx = -1, -1
+        answer_start_idx, answer_end_idx = -1, -1
+
+        try:
+            think_start_idx = comp.index(think_open)
+            think_end_idx = comp.index(think_close, think_start_idx + len(think_open))
+            think_present_complete = True
+        except ValueError:
+            # Check for incomplete think tags
+            if think_open in comp and think_close not in comp[comp.find(think_open):]:
+                score += penalty_value
+            elif think_close in comp and think_open not in comp[:comp.find(think_close)]:
+                score += penalty_value
+            # If neither part of think tag is present, it's just missing, not necessarily a penalty yet unless required.
+
+        try:
+            answer_start_idx = comp.index(answer_open)
+            answer_end_idx = comp.index(answer_close, answer_start_idx + len(answer_open))
+            answer_present_complete = True
+        except ValueError:
+            # Check for incomplete answer tags
+            if answer_open in comp and answer_close not in comp[comp.find(answer_open):]:
+                score += penalty_value
+            elif answer_close in comp and answer_open not in comp[:comp.find(answer_close)]:
+                score += penalty_value
+
+        if think_present_complete and answer_present_complete:
+            score += reward_value
+            if think_start_idx > answer_start_idx : # Think should come before answer
+                score += order_penalty # Penalize if answer tag appears before think tag
+        elif think_present_complete and not answer_present_complete: # Think is there, answer is missing/incomplete
+            score += penalty_value / 2 # Penalize missing answer less than malformed
+        elif not think_present_complete and answer_present_complete: # Answer is there, think is missing/incomplete
+            score += penalty_value / 2 # Penalize missing think
+        else: # Both are missing or both are malformed in a way not caught above (e.g. only open tags for both)
+            # If neither are present at all, this could be fine if not required by prompt.
+            # If some part of them are present but incomplete, already penalized.
+            # If completely absent, and they *were* expected, this is a general failure.
+            # Let's assume a baseline where not having them if not malformed is not explicitly penalized here,
+            # but the lack of reward_value serves as an implicit penalty.
+            # However, if there's an expectation (e.g. from system prompt) then this might need explicit penalty.
+            # For now, if neither are complete, the score remains low due to lack of reward_value.
+            # To be more aggressive, if not (think_present_complete or answer_present_complete): score += penalty_value
+            pass
+
+
+        scores.append(score)
+    return scores
+
 
 # --- Combined Reward Function for GRPO ---
 # This is where you'll combine the above functions.
@@ -150,6 +214,7 @@ def get_reward_config():
             "contains_keywords": 0.2,
             "not_contains_forbidden": 0.2,
             "question_words_not_in_answer": 0.1,
+            "think_answer_tags": 0.3,
         },
         "target_length": 70, # Adjusted target length
         "length_penalty_per_char": 0.05, # Reduced penalty per char
@@ -160,7 +225,9 @@ def get_reward_config():
         "keywords_to_reward": KEYWORDS_TO_REWARD_AR,
         "keywords_to_penalize": KEYWORDS_TO_PENALIZE_AR,
         "arabic_question_words": ARABIC_QUESTION_WORDS,
-        "clamp_rewards": {"min": -5.0, "max": 5.0} # Optional clamping for total reward
+        "clamp_rewards": {"min": -5.0, "max": 5.0}, # Optional clamping for total reward
+        "think_answer_reward_value": 1.0,
+        "think_answer_penalty_value": -1.0,
     }
 
 def combined_reward_pipeline(completions, prompts_text, reward_config):
@@ -210,6 +277,7 @@ def combined_reward_pipeline(completions, prompts_text, reward_config):
     r_forbidden_scores = reward_not_contains_forbidden_keywords(completions, cfg["keywords_to_penalize"], cfg["forbidden_penalty_value"])
     # For reward_question_words_not_in_answer, it needs prompts.
     r_q_words_scores = reward_question_words_not_in_answer(completions, expanded_prompts, cfg["arabic_question_words"], cfg["q_words_penalty_value"])
+    r_think_answer_tags_scores = reward_think_answer_tags(completions, think_tag_pair=("<think>", "</think>"), answer_tag_pair=("<answer>", "</answer>"), reward_value=cfg["think_answer_reward_value"], penalty_value=cfg["think_answer_penalty_value"])
     
     for i in range(num_completions):
         total_reward = (
@@ -217,7 +285,8 @@ def combined_reward_pipeline(completions, prompts_text, reward_config):
             w["arabic_only"] * r_arabic_scores[i] +
             w["contains_keywords"] * r_keywords_scores[i] +
             w["not_contains_forbidden"] * r_forbidden_scores[i] +
-            w["question_words_not_in_answer"] * r_q_words_scores[i]
+            w["question_words_not_in_answer"] * r_q_words_scores[i] +
+            w["think_answer_tags"] * r_think_answer_tags_scores[i]
         )
         
         if "clamp_rewards" in cfg and cfg["clamp_rewards"]:
@@ -326,6 +395,7 @@ if __name__ == '__main__':
     print("Reward Contains Keywords:", reward_contains_keywords(sample_completions, default_config["keywords_to_reward"], default_config["reward_keywords_value"]))
     print("Reward Not Contains Forbidden:", reward_not_contains_forbidden_keywords(sample_completions, default_config["keywords_to_penalize"], default_config["forbidden_penalty_value"]))
     print("Reward Question Words Not In Answer:", reward_question_words_not_in_answer(sample_completions, sample_prompts_expanded, default_config["arabic_question_words"], default_config["q_words_penalty_value"]))
+    print("Reward Think/Answer Tags:", reward_think_answer_tags(sample_completions, think_tag_pair=("<think>", "</think>"), answer_tag_pair=("<answer>", "</answer>"), reward_value=default_config["think_answer_reward_value"], penalty_value=default_config["think_answer_penalty_value"]))
 
     print("\\n--- Testing combined_reward_pipeline ---")
     combined_scores = combined_reward_pipeline(sample_completions, sample_prompts_expanded, default_config)
@@ -447,6 +517,41 @@ if __name__ == '__main__':
         print(f"Detailed rewards log: {detailed_rewards_log}")
         assert isinstance(rewards_tensor, torch.Tensor), "Rewards must be a torch.Tensor"
         assert rewards_tensor.ndim == 1 and rewards_tensor.size(0) == len(all_completions), "Rewards tensor shape incorrect"
+
+    # Test for think_answer_tags
+    sample_completions_tags = [
+        "<think>التفكير هنا.</think><answer>الإجابة هنا.</answer>", # Good
+        "<think>التفكير هنا.</think> <answer>الإجابة هنا.</answer>", # Good with space
+        "لا يوجد تفكير<answer>الإجابة هنا.</answer>", # Missing think
+        "<think>التفكير هنا.</think>الإجابة بدون علامة.", # Missing answer tag
+        "<answer>الإجابة أولاً.</answer><think>التفكير ثانياً.</think>", # Wrong order
+        "<think>مفتوح فقط", # Malformed think
+        "<answer>مفتوح فقط</answer>", # Malformed answer (closed but not opened before)
+        "كلام عادي بدون أي علامات.", # No tags
+        "<think>مغلق بشكل خاطئ</thinkwrong><answer>صحيح</answer>", # Think tag not properly closed before answer.
+                                                                    # Current logic might not catch think_close then text then answer_open
+                                                                    # But it catches if think_close is missing.
+        "<think>صحيح</think><answer>خطأ</answerwrong>"
+    ]
+    print(f"Reward Think/Answer Tags: {reward_think_answer_tags(sample_completions_tags, reward_value=default_config.get('think_answer_reward_value', 1.0), penalty_value=default_config.get('think_answer_penalty_value', -1.0))}")
+
+    # Test cases for individual functions (as per user's log, they were failing here)
+    print("\\n--- Testing individual reward functions (specific cases from log) ---")
+    print(f"Arabic only (good): {reward_arabic_only(['مرحبا بالعالم'])}") # Should be positive or 0 if perfect
+    print(f"Arabic only (bad lang): {reward_arabic_only(['Hello world'])}") # Should be negative
+
+    # The user's log showed a NameError for reward_think_answer_tags *after* this section.
+    # The previous test call for reward_think_answer_tags is added above.
+    # The following lines from the user's log seem to be from a different test setup or an older version
+    # of the script, as `sample_completions_good` is not defined here.
+    # I will remove them to prevent further errors, assuming the new test above for reward_think_answer_tags is sufficient.
+    # print(f"Think/Answer tags (good): {reward_think_answer_tags(sample_completions_good)}")
+
+    print("\\nConsiderations for reward function design:")
+    print("1. Balance: Ensure positive rewards are achievable and penalties are not overly harsh or frequent.")
+    print("2. Scaling/Normalization: If reward components have vastly different scales, normalize them before weighting.")
+    print("3. Target Behavior: Rewards should clearly guide the model towards desired Arabic reasoning and conversational properties.")
+    print("4. Iteration: Expect to iterate on weights and logic based on training behavior (e.g., if mean rewards are consistently negative).") 
 
 
     
