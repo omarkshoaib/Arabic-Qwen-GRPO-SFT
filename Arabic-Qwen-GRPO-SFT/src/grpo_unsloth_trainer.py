@@ -26,7 +26,7 @@ LORA_DROPOUT = 0.0  # GRPO can be sensitive to dropout
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # GRPO Hyperparameters
-GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 2 # Number of prompts to process for generation at once
+GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 8 # Number of prompts to process for generation at once. Adjusted based on Unsloth message.
 GRPO_GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch of prompts = BATCH_SIZE * GRAD_ACCUM_STEPS
 GRPO_LEARNING_RATE = 1e-5 # Or 5e-6, common for PPO/DPO/GRPO
 GRPO_EPOCHS = 1
@@ -134,45 +134,58 @@ def main():
             **batch_elements # Pass along prompt_input_ids etc.
         )
 
-    # GRPO Configuration
-    grpo_training_args = GRPOConfig(
+    # GRPO Configuration is now passed directly to GRPOTrainer
+    # grpo_training_args = GRPOConfig(  # ---- REMOVE THIS BLOCK START
+    #     output_dir=OUTPUT_DIR,
+    #     num_train_epochs=GRPO_EPOCHS,
+    #     per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE,
+    #     gradient_accumulation_steps=GRPO_GRADIENT_ACCUMULATION_STEPS,
+    #     learning_rate=GRPO_LEARNING_RATE,
+    #     logging_steps=GRPO_LOGGING_STEPS,
+    #     save_steps=GRPO_SAVE_STEPS,
+    #     save_total_limit=2,
+    #     report_to="wandb" if "WANDB_API_KEY" in os.environ else "none",
+    #     remove_unused_columns=False,
+    #     gradient_checkpointing=True,
+    #     max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
+    #     max_completion_length=GRPO_MAX_NEW_TOKENS,
+    #     beta=GRPO_KL_COEFF,
+    #     seed=42,
+    # ) # ---- REMOVE THIS BLOCK END
+
+    # Initialize GRPOTrainer
+    print("Initializing GRPOTrainer with direct keyword arguments for config...")
+    trainer = GRPOTrainer(
+        model=model,
+        # ref_model=None, # Can add a reference model if desired
+        # args=grpo_training_args, # REMOVED - passing args directly
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        # eval_dataset=eval_dataset, # Pass eval_dataset if loaded
+        reward_fn=reward_fn_for_trainer,
+        # peft_config=lora_config, # Unsloth's get_peft_model handles this
+
+        # Directly pass GRPOConfig/TrainingArguments fields as kwargs:
         output_dir=OUTPUT_DIR,
         num_train_epochs=GRPO_EPOCHS,
-        per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE, # This is per_device_prompt_batch_size
+        per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE,
         gradient_accumulation_steps=GRPO_GRADIENT_ACCUMULATION_STEPS,
         learning_rate=GRPO_LEARNING_RATE,
         logging_steps=GRPO_LOGGING_STEPS,
         save_steps=GRPO_SAVE_STEPS,
         save_total_limit=2,
-        report_to="wandb" if "WANDB_API_KEY" in os.environ else "none", # "tensorboard", "wandb" or "none"
-        remove_unused_columns=False, # Important for GRPO to keep all columns passed to reward_fn
-        # fp16=not torch.cuda.is_bf16_supported(), # Use FP16 if BF16 not supported
-        # bf16=torch.cuda.is_bf16_supported(),     # Use BF16 if supported
-        # Unsloth handles mixed precision with from_pretrained
-        gradient_checkpointing=True, # Equivalent to PEFT's use_gradient_checkpointing
+        report_to="wandb" if "WANDB_API_KEY" in os.environ else "none",
+        remove_unused_columns=False, # Important for GRPO
+        gradient_checkpointing=True, # From TrainingArguments
+        # fp16=not torch.cuda.is_bf16_supported(), # Let Unsloth handle mixed precision
+        # bf16=torch.cuda.is_bf16_supported(),     # or set based on support if needed by TRL directly
+        
+        # GRPOConfig specific fields
+        beta=GRPO_KL_COEFF,
         max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
-        max_completion_length=GRPO_MAX_NEW_TOKENS, # Renamed from max_new_tokens for GRPOConfig clarity
-        beta=GRPO_KL_COEFF, # KL coefficient
-        # num_generations=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE, # Number of completions per prompt
-                                                        # If batch size is X, X prompts are processed,
-                                                        # each generating Y completions if num_generations=Y.
-                                                        # GRPOTrainer will handle this with its internal _generate_completions
-                                                        # The effective batch size for reward calculation will be X*Y.
-                                                        # For now, let GRPOTrainer handle this with `per_device_train_batch_size`
-                                                        # and its internal generation logic.
-        seed=42,
-    )
-
-    # Initialize GRPOTrainer
-    trainer = GRPOTrainer(
-        model=model,
-        # ref_model=None, # Can add a reference model if desired
-        args=grpo_training_args,
-        tokenizer=tokenizer,
-        train_dataset=train_dataset, # Pass the loaded training dataset directly
-        # eval_dataset=eval_dataset, # Pass eval_dataset if loaded
-        reward_fn=reward_fn_for_trainer,
-        # peft_config=lora_config, # Unsloth's get_peft_model handles this
+        max_completion_length=GRPO_MAX_NEW_TOKENS, # Corresponds to max_new_tokens for generation
+        # loss_type="sigmoid", # Default for GRPO, can be added if needed
+        seed=42, # From TrainingArguments
     )
     print("GRPOTrainer initialized.")
 
