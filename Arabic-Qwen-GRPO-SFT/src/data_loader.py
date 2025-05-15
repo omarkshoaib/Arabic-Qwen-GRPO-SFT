@@ -20,14 +20,11 @@ def normalize_arabic_numbers(text):
     }
     return "".join([number_map.get(char, char) for char in str(text)])
 
-def format_example_for_grpo(example):
+def format_example_for_grpo(example, tokenizer):
     """
     Formats a single example from the omartificial dataset for GRPO training with Unsloth.
-    The output will be a dictionary with a 'text' field that can be tokenized by Unsloth,
-    or a 'messages' field if using chat templates explicitly.
-
-    For GRPO, we primarily need the user's instruction as the prompt.
-    Unsloth's `apply_chat_template` will handle the system prompt and roles.
+    Outputs a dictionary containing a 'prompt' string (from applying chat template to messages)
+    and the original 'messages' list.
     """
     instruction = example.get("instruction", "")
     context = example.get("context", "")
@@ -39,13 +36,28 @@ def format_example_for_grpo(example):
     
     user_query = normalize_arabic_numbers(user_query) # Normalize numbers in the query
 
-    # This list of messages will be processed by the tokenizer's chat template
-    # (e.g. Qwen2 chat template) when using Unsloth's FastLanguageModel
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_ARABIC_REASONING},
+        {"role": "user", "content": user_query.strip()},
+    ]
+
+    # Apply chat template to create the prompt string
+    # add_generation_prompt=True is crucial for the model to know it needs to generate a response.
+    prompt_string = tokenizer.apply_chat_template(
+        messages, 
+        tokenize=False, 
+        add_generation_prompt=True # Ensures the template ends with assistant's turn to generate
+    )
+    
     return {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT_ARABIC_REASONING},
-            {"role": "user", "content": user_query.strip()},
-        ]
+        "prompt": prompt_string, # This is what the trainer seems to want
+        "messages": messages,    # Keep original messages for potential later use or clarity
+        # GRPO datasets also often have 'chosen' and 'rejected' for *preference pairs*
+        # but this initial dataset is for prompts. The trainer generates completions.
+        # Adding empty placeholders for chosen/rejected in case the trainer expects them,
+        # though for the prompt dataset, they might not be strictly necessary until pairs are formed.
+        "chosen": "", 
+        "rejected": ""
     }
 
 def format_example_for_sft(example, tokenizer, max_seq_length):
@@ -132,11 +144,16 @@ def load_and_prepare_dataset(dataset_name, split="train", for_grpo=True, tokeniz
         # to create the 'prompt' that the model generates from.
         # It expects a column like 'prompt' or you can specify query_dataset_mapper in GRPOConfig.
         # We will map to create a 'messages' column, which then Unsloth can process.
-        dataset = dataset.map(format_example_for_grpo, batched=False)
+        
+        # MODIFICATION: format_example_for_grpo now needs the tokenizer.
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required for GRPO formatting to create 'prompt' string.")
+            
+        dataset = dataset.map(lambda x: format_example_for_grpo(x, tokenizer), batched=False)
         # GRPOTrainer will need a 'prompt' string. Unsloth might handle conversion from 'messages'.
         # If not, we might need another step here to apply_chat_template to 'messages' -> 'prompt_text_column'
         # For now, let's assume Unsloth handles 'messages' for GRPO input.
-        print("Formatted dataset for GRPO.")
+        print("Formatted dataset for GRPO (now includes 'prompt' string).")
     else:
         if tokenizer is None or max_seq_length is None:
             raise ValueError("Tokenizer and max_seq_length are required for SFT formatting.")
@@ -184,15 +201,17 @@ if __name__ == '__main__':
     from datasets import Dataset
     dummy_dataset_grpo = Dataset.from_dict(dummy_grpo_data)
     
-    processed_grpo_dataset = dummy_dataset_grpo.map(format_example_for_grpo)
+    processed_grpo_dataset = dummy_dataset_grpo.map(lambda x: format_example_for_grpo(x, mock_tokenizer))
     print("Sample GRPO formatted example:")
     print(processed_grpo_dataset[0])
     # Example of how Unsloth might convert messages to prompt string:
     # (This step might be internal to Unsloth's GRPOTrainer or data processing)
-    if 'messages' in processed_grpo_dataset.column_names:
-        print("\nApplying mock chat template to GRPO messages:")
-        templated_prompt = mock_tokenizer.apply_chat_template(processed_grpo_dataset[0]['messages'], tokenize=False, add_generation_prompt=True)
-        print(templated_prompt)
+    if 'messages' in processed_grpo_dataset.column_names and 'prompt' in processed_grpo_dataset.column_names:
+        print("\nGRPO example now contains 'prompt' and 'messages':")
+        print(f"Prompt string:\n{processed_grpo_dataset[0]['prompt']}")
+        # print(f"Messages list: {processed_grpo_dataset[0]['messages']}") # Optionally print messages
+        # templated_prompt = mock_tokenizer.apply_chat_template(processed_grpo_dataset[0]['messages'], tokenize=False, add_generation_prompt=True)
+        # print(templated_prompt) # This is now done inside format_example_for_grpo
 
     print("\n--- Testing SFT Data Formatting ---")
     dummy_sft_data = {
