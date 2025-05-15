@@ -1,5 +1,7 @@
 import re
 import numpy as np
+import torch
+from transformers import AutoTokenizer
 
 # Basic Arabic character detection (you might want a more robust library for this)
 def is_arabic_char(char):
@@ -392,3 +394,54 @@ if __name__ == '__main__':
     print("2. Scaling/Normalization: If reward components have vastly different scales, normalize them before weighting.")
     print("3. Target Behavior: Rewards should clearly guide the model towards desired Arabic reasoning and conversational properties.")
     print("4. Iteration: Expect to iterate on weights and logic based on training behavior (e.g., if mean rewards are consistently negative).") 
+
+    # Add this at the end of src/reward_functions.py for testing
+    if __name__ == "__main__":
+        # Test individual reward functions
+        print("--- Testing individual reward functions ---")
+        sample_completions_good = ["<think>أفكر باللغة العربية</think><answer>هذه إجابة عربية.</answer>"]
+        sample_completions_bad_lang = ["<think>Thinking in English</think><answer>English answer.</answer>"]
+        sample_completions_no_tags = ["مجرد نص عربي بدون علامات."]
+        sample_completions_short = ["<think>قصير</think><answer>جدا</answer>"]
+        sample_completions_empty = [""]
+
+        print(f"Arabic only (good): {reward_arabic_only(sample_completions_good)}")
+        print(f"Arabic only (bad lang): {reward_arabic_only(sample_completions_bad_lang)}")
+        print(f"Think/Answer tags (good): {reward_think_answer_tags(sample_completions_good)}")
+        print(f"Think/Answer tags (no tags): {reward_think_answer_tags(sample_completions_no_tags)}")
+        print(f"Length (good): {reward_length(sample_completions_good, min_len=10, max_len=200)}")
+        print(f"Length (short): {reward_length(sample_completions_short, min_len=10, max_len=200)}")
+        
+        # Test combined GRPO reward function
+        print("\n--- Testing combined GRPO reward function ---")
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct") # Or your model
+        config = get_reward_config() # Use default config
+        
+        # Simulate a batch from GRPOTrainer
+        # GRPOTrainer passes `generated_responses` (list of strings) and `**batch`
+        # where `batch` contains original inputs. Here we only need completions.
+        # Our wrapper `grpo_reward_function_unsloth` needs `completions`, `tokenizer`, `reward_config`, and optional `batch_elements`
+        
+        # Example batch elements (simplified, GRPOTrainer provides more)
+        # These aren't directly used by our current reward_fn_for_trainer wrapper's core logic
+        # but good to simulate if your rewards get more complex
+        simulated_batch_elements = {
+            # 'prompt_text': ["Some prompt text 1", "Some prompt text 2"], 
+            # 'log_probs': [torch.tensor([-0.1, -0.2]), torch.tensor([-0.3, -0.4])] 
+        }
+
+        all_completions = sample_completions_good + sample_completions_bad_lang + sample_completions_no_tags
+        
+        rewards_tensor, detailed_rewards_log = grpo_reward_function_unsloth(
+            completions=all_completions,
+            tokenizer=tokenizer, # Not strictly used by current rewards but good for consistency
+            reward_config=config,
+            batch_elements=simulated_batch_elements # Pass the simulated batch
+        )
+        print(f"Combined rewards (tensor): {rewards_tensor}")
+        print(f"Detailed rewards log: {detailed_rewards_log}")
+        assert isinstance(rewards_tensor, torch.Tensor), "Rewards must be a torch.Tensor"
+        assert rewards_tensor.ndim == 1 and rewards_tensor.size(0) == len(all_completions), "Rewards tensor shape incorrect"
+
+
+    

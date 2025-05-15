@@ -1,11 +1,12 @@
 import os
 import torch
-from datasets import load_dataset
-from transformers import TrainingArguments
-from trl import SFTTrainer # SFTTrainer from TRL
 
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import get_chat_template # For applying chat templates if needed explicitly
+
+from datasets import load_dataset
+from transformers import TrainingArguments
+from trl import SFTTrainer
 
 # Project-specific imports
 from src.data_loader import load_and_prepare_dataset
@@ -16,16 +17,15 @@ from src.data_loader import load_and_prepare_dataset
 BASE_MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct" 
 # Example: GRPO_OUTPUT_CHECKPOINT = "./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint"
 # MODEL_TO_SFT = GRPO_OUTPUT_CHECKPOINT # Or BASE_MODEL_NAME
-MODEL_TO_SFT = BASE_MODEL_NAME # Starting with base for this script template
-
-DATASET_NAME = "omartificial/OmArtificial-Dolly-instruct-5k"
-OUTPUT_DIR = "./sft_qwen2_0.5b_arabic_unsloth"
+DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset" # Corrected Dataset Name
+DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs" # Base for Colab outputs
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_arabic_unsloth")
 MAX_SEQ_LENGTH = 1024  # Max sequence length for model
 
 # LoRA configuration (Unsloth defaults)
 LORA_R = 16 # Keep same as GRPO or tune
 LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
+LORA_DROPOUT = 0.0 # Changed from 0.05
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # SFT Training Hyperparameters
@@ -42,13 +42,13 @@ def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=MODEL_TO_SFT,
+        model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=None,  # Auto-detect
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
-    print(f"Loaded model {MODEL_TO_SFT} with Unsloth.")
+    print(f"Loaded model {BASE_MODEL_NAME} with Unsloth.")
 
     # Add LoRA adapters for PEFT if training the base model or fine-tuning existing adapters.
     # If MODEL_TO_SFT is a GRPO checkpoint that already has adapters, Unsloth might load them.
@@ -71,6 +71,17 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.pad_token_id
+
+    # Apply chat template (Qwen specific or general chatml)
+    # SFTTrainer can often apply this if dataset has 'messages' column and tokenizer has template
+    # but explicitly ensuring it here is safer with Unsloth.
+    tokenizer = FastLanguageModel.apply_chat_template(
+        tokenizer,
+        template="qwen", # Or "chatml"
+        tokenize=False, # SFTTrainer will handle tokenization of the formatted text
+    )
+    if tokenizer.chat_template is None:
+        print("Warning: Chat template not set on tokenizer for SFT. SFTTrainer might have issues.")
 
     # Unsloth's SFTTrainer is good at using the chat template automatically if the dataset
     # is formatted with a 'messages' column (list of dicts) or via a formatting_func.
@@ -128,7 +139,7 @@ def main():
         max_seq_length=MAX_SEQ_LENGTH,
         packing=True, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
                       # `packing=True` is generally preferred with `SFTDataCollator`.
-        dataset_kwargs={"skip_prepare_dataset" : True}, # Added because Unsloth example did so
+        # dataset_kwargs={"skip_prepare_dataset" : True}, # Added because Unsloth example did so
     )
     print("SFTTrainer initialized.")
 

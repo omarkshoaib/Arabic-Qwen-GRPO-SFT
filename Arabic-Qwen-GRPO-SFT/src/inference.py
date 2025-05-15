@@ -1,3 +1,4 @@
+import os # Ensure os is imported for path joining if used for MODEL_TO_LOAD
 import torch
 from unsloth import FastLanguageModel
 from transformers import TextStreamer
@@ -7,12 +8,20 @@ from src.data_loader import SYSTEM_PROMPT_ARABIC_REASONING # Or define it here i
 
 # Configuration
 DEFAULT_MODEL_PATH = "Qwen/Qwen2-0.5B-Instruct" # Base model for testing before training
-# To load your trained model, change this to the path of your saved LoRA adapters, e.g.:
-# TRAINED_MODEL_PATH = "./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint"
-# TRAINED_MODEL_PATH = "./sft_qwen2_0.5b_arabic_unsloth/final_checkpoint"
-MODEL_TO_LOAD = DEFAULT_MODEL_PATH # Change this to your checkpoint path after training
 
-MAX_SEQ_LENGTH = 2048 # Should match or exceed training max_seq_length for context
+# === How to set MODEL_TO_LOAD to point to a trained checkpoint on Drive ===
+# 1. Identify the path to your saved adapters on Google Drive. Examples:
+#    DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
+#    SFT_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_arabic_unsloth", "final_checkpoint")
+#    GRPO_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2_0.5b_arabic_unsloth", "final_checkpoint")
+# 2. Then set MODEL_TO_LOAD directly to this path string:
+#    MODEL_TO_LOAD = SFT_CHECKPOINT_ON_DRIVE 
+#    or
+#    MODEL_TO_LOAD = GRPO_CHECKPOINT_ON_DRIVE
+# For now, defaulting to base model for template clarity:
+MODEL_TO_LOAD = DEFAULT_MODEL_PATH
+
+MAX_SEQ_LENGTH = 2048
 LOAD_IN_4BIT = True
 
 def run_inference(model_path, user_query, system_prompt=SYSTEM_PROMPT_ARABIC_REASONING):
@@ -24,92 +33,65 @@ def run_inference(model_path, user_query, system_prompt=SYSTEM_PROMPT_ARABIC_REA
         user_query (str): The user's question/prompt.
         system_prompt (str): The system prompt to guide the model.
     """
-    # 1. Load Model and Tokenizer with Unsloth
-    # ==================================================
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_path,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,      # Auto-detect
+        dtype=None,
         load_in_4bit=LOAD_IN_4BIT,
-        # token = "hf_..." # Add your Hugging Face token if needed
     )
     print(f"Loaded model from: {model_path}")
 
-    # Check if it's a PEFT model (adapters loaded)
     if hasattr(model, "active_adapters") and model.active_adapters:
         print(f"Active LoRA adapters: {model.active_adapters}")
-    elif model_path != DEFAULT_MODEL_PATH: # If a path was specified but no adapters found, it might be an issue
+    elif model_path != DEFAULT_MODEL_PATH and not os.path.basename(model_path).startswith("Qwen") : # Heuristic to check if it's a path and not a HF name
         print("Warning: Loaded a model from a specified path, but no active LoRA adapters found. Ensure the path is correct and contains PEFT adapters.")
     else:
-        print("Loaded base model without LoRA adapters.")
-    
-    # No need to explicitly call get_peft_model if loading a saved PEFT model (Unsloth handles it)
-    # FastLanguageModel.for_inference(model) # Prepares model for fast inference (optional, Unsloth does this automatically)
+        print("Loaded base model without LoRA adapters or a HuggingFace model name.")
 
-    # 2. Prepare inputs using Chat Template
-    # ==================================================
+    # Apply chat template (Qwen specific or general chatml)
+    # Important for instruction-following models
+    # Make sure the template matches what was used in training (SFT/GRPO prompt formatting)
+    # The apply_chat_template in trainer scripts uses "qwen".
+    # Here, we let tokenizer.apply_chat_template handle it based on its loaded config or Unsloth defaults.
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_query},
     ]
 
-    # `apply_chat_template` tokenizes and formats the input.
-    # `add_generation_prompt=True` is crucial for instruction-following models to correctly format the prompt
-    # such that the model knows it needs to generate a response.
     input_ids = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=True, 
-        add_generation_prompt=True, # Important for Qwen and other chat models
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
         return_tensors="pt"
     ).to(model.device)
 
-    # 3. Generate Response
-    # ==================================================
-    text_streamer = TextStreamer(tokenizer, skip_prompt=True) # To stream output word by word
+    text_streamer = TextStreamer(tokenizer, skip_prompt=True)
     print("\nModel Output:")
-    
-    # Generation parameters
-    # These can be tuned. For <think><answer>, you might need a higher max_new_tokens.
-    generated_outputs = model.generate(
+
+    _ = model.generate(
         input_ids,
         streamer=text_streamer,
-        max_new_tokens=512,       # Max tokens to generate
-        do_sample=True,           # Whether to sample; False uses greedy decoding
-        temperature=0.6,          # Controls randomness. Lower is more deterministic.
-        top_p=0.9,                # Nucleus sampling: cumulative probability threshold
-        # top_k=50,               # Top-K sampling: number of highest probability tokens to consider
-        # repetition_penalty=1.1, # Penalizes repeated tokens
-        # eos_token_id=tokenizer.eos_token_id, # Ensure generation stops at EOS
-        # pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
+        max_new_tokens=512,
+        do_sample=True,
+        temperature=0.6,
+        top_p=0.9,
     )
-
-    # The output is streamed, but if you want the full output as a string (after streaming):
-    # decoded_output = tokenizer.decode(generated_outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
-    # print(f"\n--- Full Decoded Output ---\n{decoded_output}")
-
-    return # Streamer handles output
+    return
 
 if __name__ == "__main__":
-    # Example Usage:
-    # --- Test with the base model first ---
-    # print("--- Testing with Base Qwen2-0.5B-Instruct ---")
-    # run_inference(DEFAULT_MODEL_PATH, "ما هي عاصمة مصر؟ اشرح خطوات تفكيرك.")
-    # print("\n" + "="*50 + "\n")
-
-    # --- Test with your trained model (after training and updating MODEL_TO_LOAD) ---
-    if MODEL_TO_LOAD != DEFAULT_MODEL_PATH:
-        print(f"--- Testing with Trained Model: {MODEL_TO_LOAD} ---")
-        # Example query for reasoning
-        test_query = "لدينا قطعتان من الحلوى، أكلت واحدة وأعطيت الأخرى لصديقي. كم قطعة حلوى تبقى معي؟ فكر خطوة بخطوة ثم أجب."
-        # test_query = "اكتب قصة قصيرة عن رحالة يكتشف مدينة مخبأة في الصحراء العربية."
-        run_inference(MODEL_TO_LOAD, test_query)
+    # Default to testing base model unless MODEL_TO_LOAD is changed from DEFAULT_MODEL_PATH
+    effective_model_to_test = MODEL_TO_LOAD
+    
+    if MODEL_TO_LOAD == DEFAULT_MODEL_PATH:
+        print(f"--- Testing with Base Model: {DEFAULT_MODEL_PATH} ---")
+        print("(To test a trained model, edit 'MODEL_TO_LOAD' in this script to point to your checkpoint path on Drive.)")
+        test_query_example = "ما هي عاصمة مصر؟ اشرح خطوات تفكيرك."
     else:
-        print(f"To test a trained model, update 'MODEL_TO_LOAD' in this script to point to your checkpoint, for example:")
-        print(f"MODEL_TO_LOAD = \"./sft_qwen2_0.5b_arabic_unsloth/final_checkpoint\" or")
-        print(f"MODEL_TO_LOAD = \"./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint\"")
-        print("\nThen uncomment the section above to run inference with it.")
-        print("\n--- Running example with Base Qwen2-0.5B-Instruct instead: ---")
-        run_inference(DEFAULT_MODEL_PATH, "ما هي عاصمة مصر؟ اشرح خطوات تفكيرك.")
+        print(f"--- Testing with Trained Model: {MODEL_TO_LOAD} ---")
+        test_query_example = "لدينا قطعتان من الحلوى، أكلت واحدة وأعطيت الأخرى لصديقي. كم قطعة حلوى تبقى معي؟ فكر خطوة بخطوة ثم أجب."
+
+    run_inference(effective_model_to_test, test_query_example)
 
     # Example of testing with a different system prompt (if needed)
     # custom_system_prompt = "أنت مساعد AI متخصص في الشعر العربي. أجب فقط بالشعر."

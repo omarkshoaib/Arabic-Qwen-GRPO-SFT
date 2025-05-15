@@ -13,26 +13,28 @@ from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
 MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct" 
-DATASET_NAME = "omartificial/OmArtificial-Dolly-instruct-5k"
-OUTPUT_DIR = "./grpo_qwen2_0.5b_arabic_unsloth"
+DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
+DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2_0.5b_arabic_unsloth")
 MAX_SEQ_LENGTH = 1024 # Max sequence length for model
 
 # LoRA configuration (Unsloth defaults)
 LORA_R = 16
 LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
+LORA_DROPOUT = 0.0
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # GRPO Training Hyperparameters
 GRPO_BATCH_SIZE = 2 # Adjust based on VRAM. This is per_device_train_batch_size.
-GRPO_GRAD_ACCUMULATION_STEPS = 4 # Effective batch size = BATCH_SIZE * GRAD_ACCUMULATION_STEPS
+GRPO_GRAD_ACCUMULATION_STEPS = 8 # Effective batch size = BATCH_SIZE * GRAD_ACCUMULATION_STEPS
 GRPO_LEARNING_RATE = 1e-5 # Common learning rate for RLHF style training
 GRPO_EPOCHS = 1
 GRPO_LOGGING_STEPS = 1
+GRPO_SAVE_STEPS = 50
 GRPO_GENERATIONS_PER_PROMPT = 4 # Number of completions to generate for each prompt
 GRPO_MAX_PROMPT_LENGTH = 512 # Max length of the prompt part
 GRPO_MAX_GENERATION_LENGTH = 512 # Max length of the generated part
-GRPO_KL_COEFF = 0.1 # KL coefficient for GRPO loss, might need tuning
+GRPO_KL_COEFF = 0.05 # KL coefficient for GRPO loss, might need tuning
 
 def main():
     # 1. Load Model and Tokenizer with Unsloth
@@ -71,17 +73,29 @@ def main():
         # tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'system' %}{{ 'system\n' + message['content'] + '\n' }}{% elif message['role'] == 'user' %}{{ 'user\n' + message['content'] + '\n' }}{% elif message['role'] == 'assistant' %}{{ 'assistant\n' + message['content'] + '\n' }}{% endif %}{% if loop.last and message['role'] != 'assistant' %}{{ 'assistant\n' }}{% endif %}{% endfor %}"
         # It's better to rely on Unsloth/HF to load this correctly.
 
+    # Unsloth recommends setting chat template this way if not done by default
+    tokenizer = FastLanguageModel.apply_chat_template(
+        tokenizer,
+        template="qwen", # Or "chatml" if more appropriate for Qwen2 general use and your prompt format
+        tokenize=False, # We apply tokenization in mapping
+    )
+    if tokenizer.chat_template is None:
+        print("Warning: Chat template not set after attempting to apply. Check template name and tokenizer.")
+
     # 2. Load and Prepare Dataset
     # ==================================================
     # The data_loader will return a dataset with a 'messages' column
     train_dataset = load_and_prepare_dataset(
         dataset_name=DATASET_NAME, 
         split="train", 
-        for_grpo=True
+        for_grpo=True,
+        tokenizer=tokenizer, # Pass tokenizer here for chat templating
+        max_seq_length=MAX_SEQ_LENGTH, # Pass for potential truncation in data_loader
     )
     # train_dataset = train_dataset.select(range(100)) # For faster testing, select a subset
     print(f"Loaded and prepared GRPO dataset with {len(train_dataset)} examples.")
-    print(f"First GRPO training example messages: {train_dataset[0]['messages']}")
+    if len(train_dataset) > 0:
+        print(f"First GRPO training example messages: {train_dataset[0]['original_messages']}") # Assuming this key exists from data_loader
 
     # The GRPOTrainer from TRL expects a text column for prompts.
     # We need to apply the chat template to our 'messages' column to create this text prompt column.
@@ -124,39 +138,38 @@ def main():
         # `batch_elements` will contain the tokenized prompts etc. from the original dataset batch
         # E.g., batch_elements might be {'prompt_text': ..., 'input_ids': ..., 'attention_mask': ...}
         # Our `grpo_reward_function_unsloth` needs this as `batch` inside its kwargs.
-        rewards = grpo_reward_function_unsloth(
+        rewards_tensor, detailed_log = grpo_reward_function_unsloth(
             completions=generated_completions,
             tokenizer=tokenizer, 
             reward_config=reward_config,
-            batch=batch_elements # Pass the whole batch elements dict as 'batch'
+            batch_elements=batch_elements # Pass the whole batch elements dict as 'batch'
         )
-        return torch.tensor(rewards, dtype=torch.float3_2)
+        return rewards_tensor
 
     # 4. Set up GRPOConfig and GRPOTrainer
     # ==================================================
-    grpo_config = GRPOConfig(
+    training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         num_train_epochs=GRPO_EPOCHS,
-        logging_steps=GRPO_LOGGING_STEPS,
+        per_device_train_batch_size=GRPO_BATCH_SIZE, # This will be adjusted by Unsloth if not multiple of num_generations
         gradient_accumulation_steps=GRPO_GRAD_ACCUMULATION_STEPS,
-        per_device_train_batch_size=GRPO_BATCH_SIZE, # This is batch size of prompts
         learning_rate=GRPO_LEARNING_RATE,
-        remove_unused_columns=False, # Important if your dataset has other columns rewards might need
-        # generation_kwargs for GRPOTrainer.generate_completions
-        max_length=GRPO_MAX_PROMPT_LENGTH + GRPO_MAX_GENERATION_LENGTH, # Max length for model.generate context + generation
-        max_new_tokens=GRPO_MAX_GENERATION_LENGTH, # Max tokens for the generated completion part
-        max_prompt_length=GRPO_MAX_PROMPT_LENGTH, # Max length of the prompt to feed to model.generate
-        num_generations=GRPO_GENERATIONS_PER_PROMPT, # Number of completions per prompt (k)
+        logging_steps=GRPO_LOGGING_STEPS,
+        save_steps=GRPO_SAVE_STEPS,
+        save_total_limit=2,
+        report_to="tensorboard",
+        remove_unused_columns=False, # Moved here, important for reward function
+    )
+    
+    print("Setting up GRPOConfig and GRPOTrainer...")
+    grpo_config = GRPOConfig(
+        **training_args.to_dict(), # Pass all training_args
+        num_generations=GRPO_GENERATIONS_PER_PROMPT,
+        max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
+        max_new_tokens=GRPO_MAX_GENERATION_LENGTH, # Correctly uses defined variable
         kl_coeff=GRPO_KL_COEFF,
-        # Unsloth related or Peft specific arguments might not go directly here but affect the model.
-        # Check Unsloth GRPO examples if specific TRL args are needed for Unsloth integration.
-        # bf16=True, # If not using 4-bit and have bf16 support
-        # fp16=False, # If using bf16
-        gradient_checkpointing=True, # Already set in get_peft_model
-        report_to="tensorboard", # or wandb
-        # query_dataset maps to the column name in your dataset that holds the prompt string.
-        # Our `create_prompt_text` creates a 'prompt_text' column.
-        query_dataset_mapper_column="prompt_text", 
+        query_dataset_mapper_column="prompt_text",
+        reward_baseline=0.0,
     )
 
     trainer = GRPOTrainer(
@@ -164,8 +177,7 @@ def main():
         args=grpo_config,    # GRPOConfig
         train_dataset=train_dataset,
         tokenizer=tokenizer,
-        reward_fn=reward_fn_for_trainer, # Your reward function
-        # data_collator=None, # GRPOTrainer has its own default collator
+        reward_function=reward_fn_for_trainer, # Your reward function
     )
     print("GRPOTrainer initialized.")
 
@@ -180,11 +192,6 @@ def main():
     # Unsloth provides a convenient way to save PEFT models, 
     # which can then be loaded easily for inference or further SFT.
     final_save_path = os.path.join(OUTPUT_DIR, "final_checkpoint")
-    # model.save_pretrained(final_save_path) # Standard Hugging Face PEFT save
-    # tokenizer.save_pretrained(final_save_path)
-    # For Unsloth, it might be better to use its saving method if it merges adapters or has specific formats.
-    # Check Unsloth docs for preferred way to save LoRA model for inference.
-    # Typically, you can save the LoRA adapters like this:
     trainer.model.save_pretrained(final_save_path) # This saves the adapters
     tokenizer.save_pretrained(final_save_path)
     print(f"Model adapters and tokenizer saved to {final_save_path}")
