@@ -1,6 +1,7 @@
 transformers>=4.40.0
 trl>=0.8.6
 datasets>=2.16.0
+unsloth
 accelerate>=0.29.0
 peft>=0.10.0
 # bitsandbytes # Usually included with unsloth, but can be listed if specific version needed

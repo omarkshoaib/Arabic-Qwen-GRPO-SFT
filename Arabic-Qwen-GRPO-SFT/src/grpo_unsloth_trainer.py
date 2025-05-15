@@ -6,9 +6,10 @@ from trl import GRPOTrainer, GRPOConfig
 from functools import partial
 
 from unsloth import FastLanguageModel
+from unsloth.chat_templates import get_chat_template
 
 # Project-specific imports
-from src.data_loader import load_and_prepare_dataset, SYSTEM_PROMPT_ARABIC_REASONING # Ensure SYSTEM_PROMPT is available if needed directly
+from src.data_loader import load_and_prepare_dataset, SYSTEM_PROMPT_ARABIC_REASONING, format_for_grpo_unsloth # Ensure SYSTEM_PROMPT is available if needed directly
 from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
@@ -74,10 +75,11 @@ def main():
         # It's better to rely on Unsloth/HF to load this correctly.
 
     # Unsloth recommends setting chat template this way if not done by default
-    tokenizer = FastLanguageModel.apply_chat_template(
+    tokenizer = get_chat_template(
         tokenizer,
-        template="qwen", # Or "chatml" if more appropriate for Qwen2 general use and your prompt format
-        tokenize=False, # We apply tokenization in mapping
+        chat_template="qwen",
+        mapping={"role": "role", "content": "content", "name": "name"},
+        map_eos_token=True,
     )
     if tokenizer.chat_template is None:
         print("Warning: Chat template not set after attempting to apply. Check template name and tokenizer.")
