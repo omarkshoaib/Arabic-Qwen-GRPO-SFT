@@ -13,10 +13,10 @@ from src.data_loader import load_and_prepare_dataset, SYSTEM_PROMPT_ARABIC_REASO
 from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
-MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2_0.5b_arabic_unsloth")
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2.5_0.5b_arabic_unsloth")
 MAX_SEQ_LENGTH = 1024
 
 # LoRA configuration
@@ -73,10 +73,10 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.eos_token_id
     
-    print("Applying 'qwen2' chat template to tokenizer...")
+    print("Applying 'chatml' chat template to tokenizer...")
     tokenizer = get_chat_template(
         tokenizer,
-        chat_template="qwen2",
+        chat_template="chatml",
         mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
         map_eos_token=True,
     )
