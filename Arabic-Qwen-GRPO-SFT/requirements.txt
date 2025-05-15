@@ -1,0 +1,21 @@
+unsloth[cu121-torch230]>=2024.6 # Or specify your CUDA/PyTorch version
+transformers>=4.40.0
+trl>=0.8.6
+datasets>=2.16.0
+accelerate>=0.29.0
+peft>=0.10.0
+# bitsandbytes # Usually included with unsloth, but can be listed if specific version needed
+torch # Usually included with unsloth
+
+# For reward functions and data processing
+scikit-learn
+numpy
+pandas
+
+# For Jupyter notebooks
+jupyter
+ipywidgets
+
+# Optional: for linting/formatting
+# ruff
+# black 
