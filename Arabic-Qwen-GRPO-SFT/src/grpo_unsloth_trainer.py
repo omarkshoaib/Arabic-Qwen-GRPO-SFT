@@ -50,9 +50,11 @@ def main():
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=DTYPE,
-        load_in_4bit=LOAD_IN_4BIT,
+        dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        load_in_4bit=True, # Use 4-bit quantization
+        # token=os.environ.get("HF_TOKEN"), # if using gated models
     )
+    print("Unsloth model with LoRA adapters loaded.")
 
     model = FastLanguageModel.get_peft_model(
         model,
@@ -71,12 +73,12 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.eos_token_id
     
-    print("Applying 'qwen' chat template to tokenizer...")
+    print("Applying 'qwen2' chat template to tokenizer...")
     tokenizer = get_chat_template(
         tokenizer,
-        chat_template="qwen",
-        mapping={"role": "role", "content": "content", "name": "name"},
-        map_eos_token=True, 
+        chat_template="qwen2",
+        mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+        map_eos_token=True,
     )
     if tokenizer.chat_template is None:
         print("CRITICAL WARNING: Chat template is still None after attempting to apply it.")
