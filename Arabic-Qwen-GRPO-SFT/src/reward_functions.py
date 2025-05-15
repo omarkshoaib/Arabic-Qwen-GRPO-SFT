@@ -74,6 +74,11 @@ ARABIC_QUESTION_WORDS = [
 ]
 
 
+# Suggestion: Add a comment to guide users on evolving this reward function.
+# For example, to make it more like a 'Reasoning Steps Reward' (from code.ipynb idea),
+# one could refine `keywords_to_reward` to include more Arabic structural reasoning words
+# (e.g., "أولاً", "ثانياً", "بالتالي", "الخطوة ١", "الاستنتاج هو") and adjust weights.
+# The current implementation is a good starting point for keyword spotting.
 def reward_contains_keywords(completions, keywords, reward_value=0.5):
     """
     Rewards completions that contain any of the specified keywords.
