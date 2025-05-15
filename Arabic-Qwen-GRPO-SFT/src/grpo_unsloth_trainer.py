@@ -13,10 +13,10 @@ from src.data_loader import load_and_prepare_dataset, SYSTEM_PROMPT_ARABIC_REASO
 from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+MODEL_NAME = "unsloth/Qwen2.5-0.5B-bnb-4bit"  # Updated Model Name
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2.5_0.5b_arabic_unsloth")
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2.5_0.5b_bnb_4bit_unsloth") # Updated Output Dir to reflect bnb-4bit
 MAX_SEQ_LENGTH = 1024
 
 # LoRA configuration
@@ -37,122 +37,144 @@ GRPO_MAX_PROMPT_LENGTH = MAX_SEQ_LENGTH // 2 # Max length for prompt part (e.g.,
 GRPO_MAX_NEW_TOKENS = MAX_SEQ_LENGTH // 2    # Max length for generated completion (e.g., 512)
 
 # Trainer settings
-LOAD_IN_4BIT = True
-DTYPE = None # None for auto detection by Unsloth
-RANDOM_SEED = 42
+# DTYPE = None # Let Unsloth decide, or set to torch.bfloat16 if available
+# LOAD_IN_4BIT = True # Already specified by unsloth model name typically
 
 def main():
+    print("--- Starting GRPO Training ---")
+    # Ensure output directory exists
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    torch.manual_seed(RANDOM_SEED)
-    # import numpy as np # Numpy import is at the end for the if __name__ == '__main__' block
-    # np.random.seed(RANDOM_SEED) # This should be done where np is imported and used
+    current_dir = os.getcwd()
+    print(f"Ensuring current working directory for training: {current_dir}")
+    print(f"Executing GRPO trainer from: {current_dir}")
 
+
+    # Load model and tokenizer
+    # For "unsloth/Qwen2.5-0.5B-bnb-4bit", load_in_4bit is implied by the model name.
+    # Unsloth handles the dtype and 4-bit loading automatically for such models.
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        load_in_4bit=True, # Use 4-bit quantization
+        # dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16, # Unsloth handles this
+        # load_in_4bit=True, # Unsloth handles this
         # token=os.environ.get("HF_TOKEN"), # if using gated models
     )
     print("Unsloth model with LoRA adapters loaded.")
 
+    # Apply chat template
+    # Using "chatml" as it's a common base for Qwen models and a Unsloth default
+    tokenizer = get_chat_template(
+        tokenizer,
+        chat_template="chatml", # Standard template
+        mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"}, # Corrected dictionary
+        map_eos_token=True, # Important for some models
+    )
+    print("Applying 'chatml' chat template to tokenizer...")
+    if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
+        print("Chat template applied successfully.")
+    else:
+        # Fallback or specific setting if get_chat_template doesn't set it as expected
+        # For Qwen/ChatML, this is typically the format.
+        # This part might be redundant if get_chat_template works as expected.
+        tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\\n' + message['content'] + '<|im_end|>' + '\\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\\n' + message['content'] + '<|im_end|>' + '\\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\\n' + message['content'] + '<|im_end|>' + '\\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}"
+        print("Manually applied ChatML template structure to tokenizer.chat_template.")
+
+
+    # PEFT setup
     model = FastLanguageModel.get_peft_model(
         model,
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
-        bias="none",
-        use_gradient_checkpointing=True, # "unsloth" is also an option
-        random_state=RANDOM_SEED,
         target_modules=LORA_TARGET_MODULES,
+        bias="none",
+        use_gradient_checkpointing="unsloth", # True or "unsloth" for memory saving
+        random_state=3407,
         max_seq_length=MAX_SEQ_LENGTH,
     )
-    print("Unsloth model with LoRA adapters loaded.")
+    print("PEFT model configured.")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.eos_token_id
-    
-    print("Applying 'chatml' chat template to tokenizer...")
-    tokenizer = get_chat_template(
-        tokenizer,
-        chat_template="chatml",
-        mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
-        map_eos_token=True,
-    )
-    if tokenizer.chat_template is None:
-        print("CRITICAL WARNING: Chat template is still None after attempting to apply it.")
-    else:
-        print("Chat template applied successfully.")
-
+    # Load and prepare dataset
     print("Loading and preparing GRPO dataset...")
     dataset = load_and_prepare_dataset(
         dataset_name=DATASET_NAME,
-        tokenizer=tokenizer, 
-        split="train", 
-        # max_seq_length is not directly used by load_and_prepare_dataset itself for GRPO,
-        # but the GRPOTrainer max_length/max_prompt_length will handle final truncation.
-        # We set for_grpo=True to trigger the correct internal formatting.
-        for_grpo=True, 
-        system_prompt_template=SYSTEM_PROMPT_ARABIC_REASONING, # This will be used by the internal GRPO formatter
-        num_proc=4
+        tokenizer=tokenizer,
+        max_seq_length=MAX_SEQ_LENGTH,
+        # system_prompt_template=SYSTEM_PROMPT_ARABIC_REASONING, # Removed this line
+        for_grpo=True,
+        num_proc=4 # Using multiple processes for mapping
     )
-    print(f"Loaded and prepared GRPO dataset with {len(dataset)} examples.")
-    if len(dataset) > 0 and 'prompt' in dataset.column_names and 'chosen' in dataset.column_names and 'rejected' in dataset.column_names:
-        print(f"First example - Prompt: {dataset[0]['prompt'][:100]}...")
-        print(f"First example - Chosen: {dataset[0]['chosen'][:100]}...")
-        print(f"First example - Rejected: {dataset[0]['rejected'][:100]}...")
-    else:
-        print("Dataset does not seem to have 'prompt', 'chosen', 'rejected' columns, or is empty. Check data_loader.py")
-        return # Exit if dataset is not correctly formatted
+    print("Dataset loaded and prepared.")
+    print(f"Train dataset size: {len(dataset['train'])}")
+    if "test" in dataset:
+        print(f"Test dataset size: {len(dataset['test'])}")
+
 
     reward_config = get_reward_config()
-    
-    def reward_fn_for_trainer(generated_completions, **batch_elements):
-        rewards = grpo_reward_function_unsloth(
-            completions=generated_completions,
-            tokenizer=tokenizer, 
-            reward_config=reward_config,
-            batch=batch_elements 
-        )
-        return rewards if isinstance(rewards, torch.Tensor) else torch.tensor(rewards, dtype=torch.float32)
 
-    training_args = TrainingArguments(
+    # Define the reward function for the GRPOTrainer
+    # It must take (completions: List[str], **kwargs)
+    # kwargs will include the batch elements like `prompt_input_ids`
+    def reward_fn_for_trainer(generated_completions_str: list[str], **batch_elements):
+        return grpo_reward_function_unsloth(
+            completions=generated_completions_str,
+            tokenizer=tokenizer,
+            reward_config=reward_config,
+            **batch_elements # Pass along prompt_input_ids etc.
+        )
+
+    # GRPO Configuration
+    grpo_training_args = GRPOConfig(
         output_dir=OUTPUT_DIR,
         num_train_epochs=GRPO_EPOCHS,
-        per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE,
+        per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE, # This is per_device_prompt_batch_size
         gradient_accumulation_steps=GRPO_GRADIENT_ACCUMULATION_STEPS,
         learning_rate=GRPO_LEARNING_RATE,
         logging_steps=GRPO_LOGGING_STEPS,
         save_steps=GRPO_SAVE_STEPS,
         save_total_limit=2,
-        report_to="tensorboard",
-        seed=RANDOM_SEED,
-        remove_unused_columns=False,
+        report_to="wandb" if "WANDB_API_KEY" in os.environ else "none", # "tensorboard", "wandb" or "none"
+        remove_unused_columns=False, # Important for GRPO to keep all columns passed to reward_fn
+        # fp16=not torch.cuda.is_bf16_supported(), # Use FP16 if BF16 not supported
+        # bf16=torch.cuda.is_bf16_supported(),     # Use BF16 if supported
+        # Unsloth handles mixed precision with from_pretrained
+        gradient_checkpointing=True, # Equivalent to PEFT's use_gradient_checkpointing
+        max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
+        max_completion_length=GRPO_MAX_NEW_TOKENS, # Renamed from max_new_tokens for GRPOConfig clarity
+        beta=GRPO_KL_COEFF, # KL coefficient
+        # num_generations=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE, # Number of completions per prompt
+                                                        # If batch size is X, X prompts are processed,
+                                                        # each generating Y completions if num_generations=Y.
+                                                        # GRPOTrainer will handle this with its internal _generate_completions
+                                                        # The effective batch size for reward calculation will be X*Y.
+                                                        # For now, let GRPOTrainer handle this with `per_device_train_batch_size`
+                                                        # and its internal generation logic.
+        seed=42,
     )
 
-    print("Initializing GRPOTrainer...")
+    # Initialize GRPOTrainer
     trainer = GRPOTrainer(
-        model=model,         
-        args=training_args,
+        model=model,
+        # ref_model=None, # Can add a reference model if desired
+        args=grpo_training_args,
         tokenizer=tokenizer,
-        reward_function=reward_fn_for_trainer,
-        train_dataset=dataset,
-        beta=GRPO_KL_COEFF,
-        max_length=MAX_SEQ_LENGTH,             
-        max_prompt_length=GRPO_MAX_PROMPT_LENGTH,    
-        max_completion_length=GRPO_MAX_NEW_TOKENS,
+        train_dataset=dataset["train"],
+        # eval_dataset=dataset.get("test"), # Optional
+        reward_fn=reward_fn_for_trainer,
+        # peft_config=lora_config, # Unsloth's get_peft_model handles this
     )
+    print("GRPOTrainer initialized.")
 
-    print("Starting GRPO training...")
+    # Start training
+    print("Starting training...")
     trainer.train()
+    print("Training finished.")
 
-    print("Training finished. Saving final LoRA adapters...")
-    final_checkpoint_dir = os.path.join(OUTPUT_DIR, "final_checkpoint")
-    trainer.save_model(final_checkpoint_dir)
+    # Save the final model
+    print(f"Saving final model to {OUTPUT_DIR}_final")
+    trainer.save_model(f"{OUTPUT_DIR}_final")
+    # tokenizer.save_pretrained(f"{OUTPUT_DIR}_final") # Trainer should save tokenizer too
+    print("Model saved.")
 
-    print(f"GRPO training complete. Model adapters saved to {final_checkpoint_dir}")
-
-if __name__ == '__main__':
-    import numpy as np 
+if __name__ == "__main__":
     main() 
