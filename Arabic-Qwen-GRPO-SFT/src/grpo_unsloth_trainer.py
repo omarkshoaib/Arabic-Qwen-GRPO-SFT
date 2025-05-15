@@ -96,19 +96,30 @@ def main():
 
     # Load and prepare dataset
     print("Loading and preparing GRPO dataset...")
-    dataset = load_and_prepare_dataset(
-        dataset_name=DATASET_NAME,
+    # Load the main training split
+    train_dataset = load_and_prepare_dataset(
+        dataset_name=DATASET_NAME, 
         tokenizer=tokenizer,
         max_seq_length=MAX_SEQ_LENGTH,
-        # system_prompt_template=SYSTEM_PROMPT_ARABIC_REASONING, # Removed this line
         for_grpo=True,
-        num_proc=4 # Using multiple processes for mapping
+        split="train" # Explicitly load the train split
     )
     print("Dataset loaded and prepared.")
-    print(f"Train dataset size: {len(dataset['train'])}")
-    if "test" in dataset:
-        print(f"Test dataset size: {len(dataset['test'])}")
+    print(f"Train dataset size: {len(train_dataset)}")
 
+    # Optional: Load a test/validation split if you want to use it with GRPOTrainer
+    # eval_dataset = None
+    # try:
+    #     eval_dataset = load_and_prepare_dataset(
+    #         dataset_name=DATASET_NAME, 
+    #         tokenizer=tokenizer,
+    #         max_seq_length=MAX_SEQ_LENGTH,
+    #         for_grpo=True,
+    #         split="test"  # Or your validation split name
+    #     )
+    #     print(f"Test dataset size: {len(eval_dataset)}")
+    # except Exception as e:
+    #     print(f"Could not load test/validation dataset: {e}. Proceeding without it.")
 
     reward_config = get_reward_config()
 
@@ -158,8 +169,8 @@ def main():
         # ref_model=None, # Can add a reference model if desired
         args=grpo_training_args,
         tokenizer=tokenizer,
-        train_dataset=dataset["train"],
-        # eval_dataset=dataset.get("test"), # Optional
+        train_dataset=train_dataset, # Pass the loaded training dataset directly
+        # eval_dataset=eval_dataset, # Pass eval_dataset if loaded
         reward_fn=reward_fn_for_trainer,
         # peft_config=lora_config, # Unsloth's get_peft_model handles this
     )
