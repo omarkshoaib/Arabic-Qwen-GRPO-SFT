@@ -134,38 +134,8 @@ def main():
             **batch_elements # Pass along prompt_input_ids etc.
         )
 
-    # GRPO Configuration is now passed directly to GRPOTrainer
-    # grpo_training_args = GRPOConfig(  # ---- REMOVE THIS BLOCK START
-    #     output_dir=OUTPUT_DIR,
-    #     num_train_epochs=GRPO_EPOCHS,
-    #     per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE,
-    #     gradient_accumulation_steps=GRPO_GRADIENT_ACCUMULATION_STEPS,
-    #     learning_rate=GRPO_LEARNING_RATE,
-    #     logging_steps=GRPO_LOGGING_STEPS,
-    #     save_steps=GRPO_SAVE_STEPS,
-    #     save_total_limit=2,
-    #     report_to="wandb" if "WANDB_API_KEY" in os.environ else "none",
-    #     remove_unused_columns=False,
-    #     gradient_checkpointing=True,
-    #     max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
-    #     max_completion_length=GRPO_MAX_NEW_TOKENS,
-    #     beta=GRPO_KL_COEFF,
-    #     seed=42,
-    # ) # ---- REMOVE THIS BLOCK END
-
-    # Initialize GRPOTrainer
-    print("Initializing GRPOTrainer with direct keyword arguments for config...")
-    trainer = GRPOTrainer(
-        model=model,
-        # ref_model=None, # Can add a reference model if desired
-        # args=grpo_training_args, # REMOVED - passing args directly
-        tokenizer=tokenizer,
-        train_dataset=train_dataset,
-        # eval_dataset=eval_dataset, # Pass eval_dataset if loaded
-        reward_fn=reward_fn_for_trainer,
-        # peft_config=lora_config, # Unsloth's get_peft_model handles this
-
-        # Directly pass GRPOConfig/TrainingArguments fields as kwargs:
+    # GRPO Configuration - Reinstated
+    grpo_training_args = GRPOConfig(
         output_dir=OUTPUT_DIR,
         num_train_epochs=GRPO_EPOCHS,
         per_device_train_batch_size=GRPO_PER_DEVICE_TRAIN_BATCH_SIZE,
@@ -176,16 +146,27 @@ def main():
         save_total_limit=2,
         report_to="wandb" if "WANDB_API_KEY" in os.environ else "none",
         remove_unused_columns=False, # Important for GRPO
-        gradient_checkpointing=True, # From TrainingArguments
+        gradient_checkpointing=True,
         # fp16=not torch.cuda.is_bf16_supported(), # Let Unsloth handle mixed precision
-        # bf16=torch.cuda.is_bf16_supported(),     # or set based on support if needed by TRL directly
-        
-        # GRPOConfig specific fields
-        beta=GRPO_KL_COEFF,
+        # bf16=torch.cuda.is_bf16_supported(),
         max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
-        max_completion_length=GRPO_MAX_NEW_TOKENS, # Corresponds to max_new_tokens for generation
-        # loss_type="sigmoid", # Default for GRPO, can be added if needed
-        seed=42, # From TrainingArguments
+        max_completion_length=GRPO_MAX_NEW_TOKENS, # Corresponds to max_new_tokens for TRL GRPOTrainer
+        beta=GRPO_KL_COEFF,
+        seed=42,
+    )
+
+    # Initialize GRPOTrainer
+    print("Initializing GRPOTrainer with GRPOConfig and reward_funcs...")
+    trainer = GRPOTrainer(
+        model=model,
+        args=grpo_training_args, # Pass the config object here
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        # eval_dataset=eval_dataset, # Pass eval_dataset if loaded
+        reward_funcs=reward_fn_for_trainer, # Pass reward function separately
+        # peft_config=lora_config, # Unsloth's get_peft_model handles this
+
+        # Removed direct keyword arguments for config as they are now in grpo_training_args
     )
     print("GRPOTrainer initialized.")
 
