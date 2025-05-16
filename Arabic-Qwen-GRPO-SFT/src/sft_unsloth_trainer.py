@@ -1,4 +1,15 @@
+import sys
 import os
+
+# Add the project root to sys.path
+# Assumes the script is in 'Arabic-Qwen-GRPO-SFT/src/'
+# Then __file__ is '.../Arabic-Qwen-GRPO-SFT/src/sft_unsloth_trainer.py'
+# os.path.dirname(__file__) is '.../Arabic-Qwen-GRPO-SFT/src/'
+# os.path.abspath(os.path.join(os.path.dirname(__file__), '..')) is '.../Arabic-Qwen-GRPO-SFT/'
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import torch
 
 from unsloth import FastLanguageModel
