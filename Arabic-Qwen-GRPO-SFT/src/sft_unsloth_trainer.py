@@ -30,7 +30,7 @@ from src.data_loader import load_and_prepare_dataset # Use our SFT-compatible da
 # You might train SFT on a GRPO-trained model or directly on the base model.
 # If training on GRPO model, MODEL_NAME would be the path to your GRPO checkpoint.
 # If training on base model, MODEL_NAME would be the path to the base model.
-BASE_MODEL_NAME = "unsloth/Qwen2-0.5B-Instruct-bnb-4bit" # Changed to Unsloth 4-bit model
+BASE_MODEL_NAME = "unsloth/Qwen2.5-0.5B-bnb-4bit" # Updated to correct Qwen2.5 model
 # Example: GRPO_OUTPUT_CHECKPOINT = "./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint"
 # MODEL_TO_SFT = GRPO_OUTPUT_CHECKPOINT # Or BASE_MODEL_NAME
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset" # Corrected Dataset Name
@@ -86,11 +86,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=None (auto-detect for 4-bit)") # Modified debug message
+    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=torch.float32 (to avoid f16 conversion issues)")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_TO_SFT, # Use MODEL_TO_SFT here
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,  # Let Unsloth auto-detect for 4-bit model
+        dtype=torch.float32,  # Explicitly use float32 to avoid f16 conversion issues
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -207,7 +207,7 @@ def main():
         warmup_ratio=SFT_WARMUP_RATIO, # More common
         max_grad_norm=SFT_MAX_GRAD_NORM, # From Unsloth example
         seed=42,
-        fp16=True,             # Enable fp16
+        fp16=False,            # Disable fp16 to avoid conversion issues
         bf16=False,              # Disable bf16
         logging_strategy="steps", # Ensure logging strategy is set
         eval_strategy="no", # No evaluation during SFT for now
