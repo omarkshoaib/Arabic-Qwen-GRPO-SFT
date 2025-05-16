@@ -56,10 +56,11 @@ SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommended for memory saving
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
+    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with explicit dtype torch.float16")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,  # Auto-detect
+        dtype=torch.float16,  # Explicitly set to float16
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -172,8 +173,8 @@ def main():
         lr_scheduler_type=SFT_LR_SCHEDULER_TYPE,
         warmup_ratio=SFT_WARMUP_RATIO,
         save_strategy="epoch",
-        # bf16=True, # If not using 4-bit and have bf16 support
-        # fp16=False,
+        fp16=True, # Explicitly set for Tesla T4 compatibility
+        bf16=False,
         remove_unused_columns=False, # Keep `messages` column for SFTTrainer
         gradient_checkpointing=True, # Already set in get_peft_model
         report_to="tensorboard",
@@ -191,7 +192,7 @@ def main():
         formatting_func=None,     # Dataset is already formatted and tokenized
         args=training_args,
         max_seq_length=MAX_SEQ_LENGTH,
-        packing=True, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
+        packing=False, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
                       # `packing=True` is generally preferred with `SFTDataCollator`.
         # dataset_kwargs={"skip_prepare_dataset" : True}, # Added because Unsloth example did so
     )
