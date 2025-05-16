@@ -56,11 +56,11 @@ SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommended for memory saving
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with dtype=None (auto-detect for 4-bit)") # Modified debug message
+    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with explicit dtype torch.bfloat16") # Modified debug message
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=None,  # Let Unsloth auto-detect for 4-bit model
+        dtype=torch.bfloat16,  # Explicitly set to bfloat16
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -169,15 +169,26 @@ def main():
         learning_rate=SFT_LEARNING_RATE,
         logging_steps=SFT_LOGGING_STEPS,
         # optim="adamw_torch", # Standard AdamW
-        optim=SFT_OPTIMIZER, # Use Unsloth's 8bit AdamW for memory efficiency
-        lr_scheduler_type=SFT_LR_SCHEDULER_TYPE,
-        warmup_ratio=SFT_WARMUP_RATIO,
-        save_strategy="epoch",
-        fp16=True, # RE-ADD THIS LINE
-        bf16=False, # RE-ADD THIS LINE
-        remove_unused_columns=False, # Keep `messages` column for SFTTrainer
-        gradient_checkpointing=True, # Already set in get_peft_model
-        report_to="tensorboard",
+        optim=SFT_OPTIMIZER,       # Use 8bit optimizers from bitsandbytes
+        # weight_decay=0.01,      # From Unsloth example
+        lr_scheduler_type=SFT_LR_SCHEDULER_TYPE, # From Unsloth example
+        # warmup_steps=5,           # From Unsloth example
+        warmup_ratio=SFT_WARMUP_RATIO, # More common
+        max_grad_norm=SFT_MAX_GRAD_NORM, # From Unsloth example
+        seed=42,
+        fp16=False,             # Disable fp16
+        bf16=True,              # Enable bf16
+        logging_strategy="steps", # Ensure logging strategy is set
+        evaluation_strategy="no", # No evaluation during SFT for now
+        save_strategy="steps",
+        save_steps=SFT_SAVE_STEPS,
+        save_total_limit=2,
+        # dataloader_num_workers=2, # Can sometimes cause issues in Colab
+        group_by_length=False, # Faster when False, but True can sometimes help training on varied sequence lengths
+        remove_unused_columns=False, # Important for custom tokenized datasets
+        # gradient_checkpointing = not IS_COLAB, # True can save memory but slow down, False for Colab if facing issues
+        # gradient_checkpointing_kwargs={"use_reentrant": False}, # Recommended with Unsloth if checkpointing
+        report_to="none" # Disable wandb/other reporting for now
     )
 
     # SFTTrainer from TRL
