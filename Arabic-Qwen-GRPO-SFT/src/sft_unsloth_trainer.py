@@ -122,6 +122,10 @@ def main():
             padding=False,
             max_length=MAX_SEQ_LENGTH,
         )
+        
+        # Create labels for causal language modeling (same as input_ids)
+        tokenized_outputs["labels"] = tokenized_outputs["input_ids"].copy()
+        
         return tokenized_outputs
 
     # Apply the formatting and tokenization
@@ -168,6 +172,10 @@ def main():
         padding=True,
         label_pad_token_id=-100
     )
+    
+    # Set task to causal language modeling
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.use_cache = False  # Disable KV cache during training for efficiency
     
     trainer = Trainer(
         model=model,
