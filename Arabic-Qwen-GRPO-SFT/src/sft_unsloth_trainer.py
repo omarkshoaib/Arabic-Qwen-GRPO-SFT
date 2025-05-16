@@ -56,11 +56,11 @@ SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommended for memory saving
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} without explicit dtype") # Modified debug message
+    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with explicit dtype torch.float16") # Modified debug message
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        # dtype=torch.float16,  # Explicitly set to float16 - REMOVED
+        dtype=torch.float16,  # RE-ADD THIS LINE
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -173,8 +173,8 @@ def main():
         lr_scheduler_type=SFT_LR_SCHEDULER_TYPE,
         warmup_ratio=SFT_WARMUP_RATIO,
         save_strategy="epoch",
-        # fp16=True, # Explicitly set for Tesla T4 compatibility - REMOVED
-        # bf16=False, # REMOVED
+        fp16=True, # RE-ADD THIS LINE
+        bf16=False, # RE-ADD THIS LINE
         remove_unused_columns=False, # Keep `messages` column for SFTTrainer
         gradient_checkpointing=True, # Already set in get_peft_model
         report_to="tensorboard",
