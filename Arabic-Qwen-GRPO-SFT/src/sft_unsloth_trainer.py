@@ -86,11 +86,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=torch.bfloat16 (to avoid f16 conversion issues)")
+    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=torch.float16 (T4 GPU doesn't support bfloat16)")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_TO_SFT, # Use MODEL_TO_SFT here
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.bfloat16,  # Use bfloat16 to avoid f16 conversion issues
+        dtype=torch.float16,  # Use float16 since T4 doesn't support bfloat16
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -207,8 +207,8 @@ def main():
         warmup_ratio=SFT_WARMUP_RATIO, # More common
         max_grad_norm=SFT_MAX_GRAD_NORM, # From Unsloth example
         seed=42,
-        fp16=False,            # Disable fp16
-        bf16=True,             # Enable bf16 to match model dtype
+        fp16=True,             # Enable fp16 for T4 GPU
+        bf16=False,            # Disable bf16 as T4 doesn't support it
         logging_strategy="steps", # Ensure logging strategy is set
         eval_strategy="no", # No evaluation during SFT for now
         save_strategy="steps",
