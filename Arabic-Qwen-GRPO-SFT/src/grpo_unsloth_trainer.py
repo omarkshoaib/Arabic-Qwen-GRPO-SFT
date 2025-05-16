@@ -124,14 +124,18 @@ def main():
     reward_config = get_reward_config()
 
     # Define the reward function for the GRPOTrainer
-    # It must take (completions: List[str], **kwargs)
-    # kwargs will include the batch elements like `prompt_input_ids`
-    def reward_fn_for_trainer(generated_completions_str: list[str], **batch_elements):
+    # It must align with how Unsloth's GRPOTrainer calls it.
+    # Unsloth calls: reward_func(prompts=prompts, completions=completions, **reward_kwargs)
+    def reward_fn_for_trainer(prompts: list[str], completions: list[str], **batch_elements):
+        # batch_elements will contain other items from the batch like 'prompt_input_ids', 'attention_mask' etc.
+        # if they were part of the original dataset columns and not removed.
+        # The GRPOTrainer prepares these.
         return grpo_reward_function_unsloth(
-            completions=generated_completions_str,
+            completions=completions, # This is `generated_completions_str` essentially
             tokenizer=tokenizer,
             reward_config=reward_config,
-            **batch_elements # Pass along prompt_input_ids etc.
+            prompts=prompts,         # Pass the textual prompts
+            **batch_elements         # Pass other batch elements like prompt_input_ids
         )
 
     # GRPO Configuration - Reinstated
