@@ -60,7 +60,6 @@ def main():
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.float16,  # Explicitly set to float16
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
@@ -173,54 +172,4 @@ def main():
         lr_scheduler_type=SFT_LR_SCHEDULER_TYPE,
         warmup_ratio=SFT_WARMUP_RATIO,
         save_strategy="epoch",
-        fp16=True, # Explicitly set for Tesla T4 compatibility
-        bf16=False,
-        remove_unused_columns=False, # Keep `messages` column for SFTTrainer
-        gradient_checkpointing=True, # Already set in get_peft_model
-        report_to="tensorboard",
-    )
-
-    # SFTTrainer from TRL
-    # Unsloth works seamlessly with TRL's SFTTrainer.
-    # It expects a dataset where each example is a list of messages, or a formatting function.
-    # Our `load_and_prepare_dataset` with `for_grpo=False` creates a 'messages' column.
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=train_dataset,
-        dataset_text_field=None,  # Crucial: dataset is now pre-tokenized with input_ids, attention_mask
-        formatting_func=None,     # Dataset is already formatted and tokenized
-        args=training_args,
-        max_seq_length=MAX_SEQ_LENGTH,
-        packing=False, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
-                      # `packing=True` is generally preferred with `SFTDataCollator`.
-        # dataset_kwargs={"skip_prepare_dataset" : True}, # Added because Unsloth example did so
-    )
-    print("SFTTrainer initialized.")
-
-    # 4. Train the model
-    # ==================================================
-    print("Starting SFT training...")
-    trainer.train()
-    print("SFT training finished.")
-
-    # 5. Save the model
-    # ==================================================
-    final_save_path = os.path.join(OUTPUT_DIR, "final_checkpoint")
-    trainer.model.save_pretrained(final_save_path) # Saves LoRA adapters
-    tokenizer.save_pretrained(final_save_path)
-    print(f"SFT Model adapters and tokenizer saved to {final_save_path}")
-
-    # For merging and saving the full model (optional, requires more RAM/CPU)
-    # if hasattr(model, "merge_and_unload"):
-    #     print("Merging adapters to save full model...")
-    #     merged_model_path = os.path.join(OUTPUT_DIR, "final_merged_model")
-    #     merged_model = trainer.model.merge_and_unload()
-    #     merged_model.save_pretrained(merged_model_path)
-    #     tokenizer.save_pretrained(merged_model_path)
-    #     print(f"Merged SFT model saved to {merged_model_path}")
-    # else:
-    #     print("Standard PEFT model saving. For Unsloth merged model, manually load and merge if needed.")
-
-if __name__ == "__main__":
-    main() 
+        remove_unused_columns=False, # Keep `messages`
