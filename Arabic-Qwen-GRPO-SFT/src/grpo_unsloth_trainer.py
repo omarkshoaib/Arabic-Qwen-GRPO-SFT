@@ -26,8 +26,8 @@ LORA_DROPOUT = 0.0  # GRPO can be sensitive to dropout
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # GRPO Hyperparameters
-GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 16 # Number of prompts to process for generation at once. Adjusted based on Unsloth message.
-GRPO_GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch of prompts = BATCH_SIZE * GRAD_ACCUM_STEPS
+GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 32 # Reduced from 512, safer start for A100
+GRPO_GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch of 256
 GRPO_LEARNING_RATE = 1e-5 # Or 5e-6, common for PPO/DPO/GRPO
 GRPO_EPOCHS = 1
 GRPO_LOGGING_STEPS = 1
@@ -151,6 +151,7 @@ def main():
         report_to="wandb" if "WANDB_API_KEY" in os.environ else "none",
         remove_unused_columns=False, # Important for GRPO
         gradient_checkpointing=True,
+        max_grad_norm=1.0, # Added for gradient clipping
         # fp16=not torch.cuda.is_bf16_supported(), # Let Unsloth handle mixed precision
         # bf16=torch.cuda.is_bf16_supported(),
         max_prompt_length=GRPO_MAX_PROMPT_LENGTH,
