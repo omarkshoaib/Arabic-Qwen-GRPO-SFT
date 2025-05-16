@@ -26,7 +26,7 @@ LORA_DROPOUT = 0.0  # GRPO can be sensitive to dropout
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # GRPO Hyperparameters
-GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 8 # Number of prompts to process for generation at once. Adjusted based on Unsloth message.
+GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 16 # Number of prompts to process for generation at once. Adjusted based on Unsloth message.
 GRPO_GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch of prompts = BATCH_SIZE * GRAD_ACCUM_STEPS
 GRPO_LEARNING_RATE = 1e-5 # Or 5e-6, common for PPO/DPO/GRPO
 GRPO_EPOCHS = 1

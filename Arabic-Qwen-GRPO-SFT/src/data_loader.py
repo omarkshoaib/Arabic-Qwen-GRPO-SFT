@@ -51,7 +51,7 @@ def format_example_for_grpo(example, tokenizer):
     
     return {
         "prompt": prompt_string, # This is what the trainer seems to want
-        "messages": messages,    # Keep original messages for potential later use or clarity
+        # "messages": messages,    # Removed to avoid conflict with trl.data_utils.apply_chat_template
         # GRPO datasets also often have 'chosen' and 'rejected' for *preference pairs*
         # but this initial dataset is for prompts. The trainer generates completions.
         # Adding empty placeholders for chosen/rejected in case the trainer expects them,
@@ -206,8 +206,8 @@ if __name__ == '__main__':
     print(processed_grpo_dataset[0])
     # Example of how Unsloth might convert messages to prompt string:
     # (This step might be internal to Unsloth's GRPOTrainer or data processing)
-    if 'messages' in processed_grpo_dataset.column_names and 'prompt' in processed_grpo_dataset.column_names:
-        print("\nGRPO example now contains 'prompt' and 'messages':")
+    if 'prompt' in processed_grpo_dataset.column_names:
+        print("\nGRPO example now contains 'prompt':")
         print(f"Prompt string:\n{processed_grpo_dataset[0]['prompt']}")
         # print(f"Messages list: {processed_grpo_dataset[0]['messages']}") # Optionally print messages
         # templated_prompt = mock_tokenizer.apply_chat_template(processed_grpo_dataset[0]['messages'], tokenize=False, add_generation_prompt=True)
