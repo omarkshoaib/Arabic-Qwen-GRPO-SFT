@@ -210,7 +210,7 @@ def main():
         fp16=True,             # Enable fp16
         bf16=False,              # Disable bf16
         logging_strategy="steps", # Ensure logging strategy is set
-        evaluation_strategy="no", # No evaluation during SFT for now
+        eval_strategy="no", # No evaluation during SFT for now
         save_strategy="steps",
         save_steps=SFT_SAVE_STEPS,
         save_total_limit=2,
