@@ -112,30 +112,51 @@ def main():
         tokenizer=tokenizer, 
         max_seq_length=MAX_SEQ_LENGTH
     )
+    print(f"Loaded SFT dataset with {len(train_dataset)} examples (contains 'messages' column).")
     # train_dataset = train_dataset.select(range(200)) # For faster testing
-    print(f"Loaded SFT dataset with {len(train_dataset)} examples (before formatting).")
-    print(f"First SFT training example messages (before formatting): {train_dataset[0]['messages']}")
 
-    # Define a formatting function to prepare a 'text' column for SFTTrainer
-    # This is often required or preferred by Unsloth's SFTTrainer
-    def format_dataset_for_sft(examples):
+    # Define a function to format messages to a single string and then tokenize
+    # This prepares 'input_ids' and 'attention_mask' for SFTTrainer
+    def format_and_tokenize_dataset(examples):
         # examples['messages'] is a list of message lists (one for each example in the batch)
-        texts = []
+        formatted_texts = []
         for single_example_messages in examples['messages']:
             formatted_str = tokenizer.apply_chat_template(
                 single_example_messages,
-                tokenize=False,
-                add_generation_prompt=False # Important for SFT
+                tokenize=False, # Get the string representation
+                add_generation_prompt=False # Appropriate for SFT
             )
-            texts.append(formatted_str)
-        return {"text": texts}
+            formatted_texts.append(formatted_str)
+        
+        # Tokenize the batch of formatted texts
+        # padding=False because SFTDataCollator with packing=True handles this.
+        # truncation=True is essential.
+        tokenized_outputs = tokenizer(
+            formatted_texts,
+            truncation=True,
+            padding=False, 
+            max_length=MAX_SEQ_LENGTH,
+        )
+        # tokenized_outputs is a BatchEncoding, which is dict-like
+        # and will contain 'input_ids', 'attention_mask'.
+        # SFTTrainer with packing=True will automatically create 'labels' from 'input_ids'.
+        return tokenized_outputs
 
-    train_dataset = train_dataset.map(format_dataset_for_sft, batched=True)
-    print(f"Formatted SFT dataset. Now has a 'text' column.")
-    if 'text' in train_dataset.column_names:
-        print(f"First SFT training example (formatted text): {train_dataset[0]['text']}")
+    # Apply the formatting and tokenization
+    # Remove the original 'messages' column as it's now processed into input_ids/attention_mask
+    # and any other columns from the original load that are not input_ids or attention_mask.
+    # Be cautious if other columns are needed by the trainer, but typically not with this setup.
+    original_columns = train_dataset.column_names
+    train_dataset = train_dataset.map(
+        format_and_tokenize_dataset, 
+        batched=True, 
+        remove_columns=[col for col in original_columns if col not in ['input_ids', 'attention_mask']] # Keep only what tokenizer produces + what map might add
+    )
+    print(f"Formatted and tokenized SFT dataset. Columns: {train_dataset.column_names}")
+    if 'input_ids' in train_dataset.column_names and len(train_dataset) > 0:
+        print(f"First SFT training example input_ids length: {len(train_dataset[0]['input_ids'])}")
     else:
-        print("Warning: 'text' column not found after mapping. Check formatting function.")
+        print("Warning: 'input_ids' column not found or dataset empty after tokenization. Check formatting function.")
 
     # 3. Set up TrainingArguments and SFTTrainer
     # ==================================================
@@ -166,8 +187,8 @@ def main():
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
-        dataset_text_field="text",  # Use the newly created 'text' column
-        formatting_func=None,     # Dataset is already formatted
+        dataset_text_field=None,  # Crucial: dataset is now pre-tokenized with input_ids, attention_mask
+        formatting_func=None,     # Dataset is already formatted and tokenized
         args=training_args,
         max_seq_length=MAX_SEQ_LENGTH,
         packing=True, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
