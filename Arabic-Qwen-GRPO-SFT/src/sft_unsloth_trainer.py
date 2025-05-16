@@ -22,13 +22,16 @@ from unsloth.chat_templates import get_chat_template # For applying chat templat
 from datasets import load_dataset
 from transformers import TrainingArguments
 from trl import SFTTrainer
+from peft import LoraConfig #, PeftModel, get_peft_model - Unsloth handles PEFT
 
-# Project-specific imports
-from src.data_loader import load_and_prepare_dataset
+from src.data_loader import load_and_prepare_dataset # Use our SFT-compatible data loader
+
+from cut_cross_entropy.transformers import cce_patch # Import cce_patch
 
 # Configuration
 # You might train SFT on a GRPO-trained model or directly on the base model.
 # If training on GRPO model, MODEL_NAME would be the path to your GRPO checkpoint.
+# If training on base model, MODEL_NAME would be the path to the base model.
 BASE_MODEL_NAME = "unsloth/Qwen2-0.5B-Instruct-bnb-4bit" # Changed to Unsloth 4-bit model
 # Example: GRPO_OUTPUT_CHECKPOINT = "./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint"
 # MODEL_TO_SFT = GRPO_OUTPUT_CHECKPOINT # Or BASE_MODEL_NAME
@@ -37,34 +40,63 @@ DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs" # Base for Cola
 OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_instruct_bnb_4bit_unsloth") # Updated output directory
 MAX_SEQ_LENGTH = 1024  # Max sequence length for model
 
-# LoRA configuration (Unsloth defaults)
-LORA_R = 16 # Keep same as GRPO or tune
-LORA_ALPHA = 32
-LORA_DROPOUT = 0.0 # Changed from 0.05
-LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-
 # SFT Training Hyperparameters
-SFT_BATCH_SIZE = 2 # Adjust based on VRAM
+SFT_EPOCHS = 3
+SFT_BATCH_SIZE = 2 # Keep low for Colab
 SFT_GRAD_ACCUMULATION_STEPS = 4
-SFT_LEARNING_RATE = 2e-4 # SFT can often use a slightly higher LR than PPO/GRPO
-SFT_EPOCHS = 3 # SFT usually involves more epochs
+SFT_LEARNING_RATE = 2e-4 # Common for SFT
 SFT_LOGGING_STEPS = 10
-SFT_WARMUP_RATIO = 0.03
-SFT_LR_SCHEDULER_TYPE = "linear"
-SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommended for memory saving
+SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommends paged_adamw_8bit or adamw_8bit
+SFT_LR_SCHEDULER_TYPE = "cosine"  # Define missing variable
+SFT_WARMUP_RATIO = 0.1
+SFT_MAX_GRAD_NORM = 0.3  # Define missing variable
+SFT_SAVE_STEPS = 100 # Save checkpoints less frequently
+
+# LoRA Configuration (if used with SFT directly on base model)
+# These are ignored if MODEL_TO_SFT is a LoRA checkpoint that gets merged before SFT.
+# If SFT is done on a base model, these PEFT settings would be applied.
+# For now, assuming MODEL_TO_SFT will be the base model and SFTTrainer will handle LoRA.
+# Unsloth's FastLanguageModel.get_peft_model handles this if we are to train LoRA adapters.
+# SFTTrainer can also take a PeftConfig.
+# Let's ensure LoRA is applied correctly.
+
+R_LORA = 16
+LORA_ALPHA = R_LORA * 2
+# TARGET_MODULES_LORA = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+# More robust way to get all linear layers for Qwen2
+TARGET_MODULES_LORA = [
+    "q_proj", "k_proj", "v_proj", "o_proj",
+    "gate_proj", "up_proj", "down_proj",
+    # "embed_tokens", "lm_head", # Usually not targeted for LoRA
+]
+LORA_DROPOUT = 0.05 # Or 0.1, common values
+
+# Model to SFT - either the base model or a GRPO checkpoint
+# IMPORTANT: If GRPO_OUTPUT_CHECKPOINT is a LoRA model, it needs to be merged to base before SFT,
+# or SFTTrainer needs to be aware it's training on top of existing adapters.
+# For simplicity, let's assume SFT is on the base model, or a fully merged GRPO model.
+MODEL_TO_SFT = BASE_MODEL_NAME
+# MODEL_TO_SFT = "/content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_qwen2_0.5b_instruct_bnb_4bit_unsloth/final_checkpoint" # Example if GRPO output is a full model
+
+# Helper to check if running in Colab
+IS_COLAB = "google.colab" in sys.modules
+
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+# =====================================================================================
 
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with explicit dtype torch.bfloat16") # Modified debug message
+    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=None (auto-detect for 4-bit)") # Modified debug message
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=BASE_MODEL_NAME,
+        model_name=MODEL_TO_SFT, # Use MODEL_TO_SFT here
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.bfloat16,  # Explicitly set to bfloat16
+        dtype=None,  # Let Unsloth auto-detect for 4-bit model
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
-    print(f"Loaded model {BASE_MODEL_NAME} with Unsloth.")
+    print(f"Loaded model {MODEL_TO_SFT} with Unsloth.")
 
     # Add LoRA adapters for PEFT if training the base model or fine-tuning existing adapters.
     # If MODEL_TO_SFT is a GRPO checkpoint that already has adapters, Unsloth might load them.
@@ -72,16 +104,23 @@ def main():
     # For simplicity, we assume we are adding/replacing LoRA adapters here.
     model = FastLanguageModel.get_peft_model(
         model,
-        r=LORA_R,
+        r=R_LORA,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
         bias="none",
         use_gradient_checkpointing=True,
         random_state=42,
-        target_modules=LORA_TARGET_MODULES,
+        target_modules=TARGET_MODULES_LORA,
         max_seq_length=MAX_SEQ_LENGTH,
     )
     print("Unsloth model with LoRA adapters prepared for SFT.")
+
+    # Patch CCE to use torch.compile implementation to hopefully avoid Triton error
+    try:
+        model = cce_patch(model, impl="torch_compile")
+        print("Successfully patched model with cce_patch(impl='torch_compile').")
+    except Exception as e:
+        print(f"Error patching model with cce_patch: {e}. Proceeding without patch.")
 
     # Pad token and chat template handling (similar to GRPO trainer)
     if tokenizer.pad_token is None:
@@ -176,8 +215,8 @@ def main():
         warmup_ratio=SFT_WARMUP_RATIO, # More common
         max_grad_norm=SFT_MAX_GRAD_NORM, # From Unsloth example
         seed=42,
-        fp16=False,             # Disable fp16
-        bf16=True,              # Enable bf16
+        fp16=True,             # Enable fp16
+        bf16=False,              # Disable bf16
         logging_strategy="steps", # Ensure logging strategy is set
         evaluation_strategy="no", # No evaluation during SFT for now
         save_strategy="steps",
