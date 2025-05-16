@@ -56,11 +56,11 @@ SFT_OPTIMIZER = "adamw_8bit" # Unsloth recommended for memory saving
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with explicit dtype torch.float16") # Modified debug message
+    print(f"DEBUG: Attempting to load model {BASE_MODEL_NAME} with dtype=None (auto-detect for 4-bit)") # Modified debug message
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.float16,  # RE-ADD THIS LINE
+        dtype=None,  # Let Unsloth auto-detect for 4-bit model
         load_in_4bit=True,
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
