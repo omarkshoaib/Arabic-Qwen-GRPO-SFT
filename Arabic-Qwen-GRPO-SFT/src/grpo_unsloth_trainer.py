@@ -26,7 +26,7 @@ LORA_DROPOUT = 0.0  # GRPO can be sensitive to dropout
 LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # GRPO Hyperparameters
-GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 32 # Reduced from 512, safer start for A100
+GRPO_PER_DEVICE_TRAIN_BATCH_SIZE = 32 # Reduced for faster debugging on L4
 GRPO_GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch of 256
 GRPO_LEARNING_RATE = 1e-5 # Or 5e-6, common for PPO/DPO/GRPO
 GRPO_EPOCHS = 1
