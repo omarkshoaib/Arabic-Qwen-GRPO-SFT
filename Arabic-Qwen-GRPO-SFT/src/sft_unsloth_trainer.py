@@ -86,10 +86,11 @@ def main():
     # Apply chat template (Qwen specific or general chatml)
     # SFTTrainer can often apply this if dataset has 'messages' column and tokenizer has template
     # but explicitly ensuring it here is safer with Unsloth.
-    tokenizer = FastLanguageModel.apply_chat_template(
+    tokenizer = get_chat_template(
         tokenizer,
-        template="qwen", # Or "chatml"
-        tokenize=False, # SFTTrainer will handle tokenization of the formatted text
+        chat_template="chatml", # Standard template, worked in GRPO
+        mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"}, # Consistent mapping
+        map_eos_token=True, # Important for some models
     )
     if tokenizer.chat_template is None:
         print("Warning: Chat template not set on tokenizer for SFT. SFTTrainer might have issues.")
