@@ -26,8 +26,6 @@ from peft import LoraConfig #, PeftModel, get_peft_model - Unsloth handles PEFT
 
 from src.data_loader import load_and_prepare_dataset # Use our SFT-compatible data loader
 
-from cut_cross_entropy.transformers import cce_patch # Import cce_patch
-
 # Configuration
 # You might train SFT on a GRPO-trained model or directly on the base model.
 # If training on GRPO model, MODEL_NAME would be the path to your GRPO checkpoint.
@@ -115,14 +113,8 @@ def main():
     )
     print("Unsloth model with LoRA adapters prepared for SFT.")
 
-    # Patch CCE to use torch.compile implementation to hopefully avoid Triton error
-    try:
-        model = cce_patch(model, impl="torch_compile")
-        print("Successfully patched model with cce_patch(impl='torch_compile').")
-    except Exception as e:
-        print(f"Error patching model with cce_patch: {e}. Proceeding without patch.")
-
-    # Pad token and chat template handling (similar to GRPO trainer)
+    # Ensure tokenizer's chat template is set up if not done by Unsloth
+    # (Unsloth usually handles this, but good to double-check or be explicit if issues arise)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.pad_token_id
