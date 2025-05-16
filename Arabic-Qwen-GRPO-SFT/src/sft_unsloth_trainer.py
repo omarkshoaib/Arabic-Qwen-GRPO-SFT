@@ -29,12 +29,12 @@ from src.data_loader import load_and_prepare_dataset
 # Configuration
 # You might train SFT on a GRPO-trained model or directly on the base model.
 # If training on GRPO model, MODEL_NAME would be the path to your GRPO checkpoint.
-BASE_MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct" 
+BASE_MODEL_NAME = "unsloth/Qwen2-0.5B-Instruct-bnb-4bit" # Changed to Unsloth 4-bit model
 # Example: GRPO_OUTPUT_CHECKPOINT = "./grpo_qwen2_0.5b_arabic_unsloth/final_checkpoint"
 # MODEL_TO_SFT = GRPO_OUTPUT_CHECKPOINT # Or BASE_MODEL_NAME
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset" # Corrected Dataset Name
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs" # Base for Colab outputs
-OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_arabic_unsloth")
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_instruct_bnb_4bit_unsloth") # Updated output directory
 MAX_SEQ_LENGTH = 1024  # Max sequence length for model
 
 # LoRA configuration (Unsloth defaults)
