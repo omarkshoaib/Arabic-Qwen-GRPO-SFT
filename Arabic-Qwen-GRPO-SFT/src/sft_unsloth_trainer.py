@@ -67,7 +67,7 @@ TARGET_MODULES_LORA = [
     "gate_proj", "up_proj", "down_proj",
     # "embed_tokens", "lm_head", # Usually not targeted for LoRA
 ]
-LORA_DROPOUT = 0.05 # Or 0.1, common values
+LORA_DROPOUT = 0.0 # Changed from 0.05 to 0.0 for Unsloth fast patching compatibility
 
 # Model to SFT - either the base model or a GRPO checkpoint
 # IMPORTANT: If GRPO_OUTPUT_CHECKPOINT is a LoRA model, it needs to be merged to base before SFT,
