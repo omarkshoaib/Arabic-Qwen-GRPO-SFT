@@ -109,8 +109,29 @@ def main():
         max_seq_length=MAX_SEQ_LENGTH
     )
     # train_dataset = train_dataset.select(range(200)) # For faster testing
-    print(f"Loaded and prepared SFT dataset with {len(train_dataset)} examples.")
-    print(f"First SFT training example messages: {train_dataset[0]['messages']}")
+    print(f"Loaded SFT dataset with {len(train_dataset)} examples (before formatting).")
+    print(f"First SFT training example messages (before formatting): {train_dataset[0]['messages']}")
+
+    # Define a formatting function to prepare a 'text' column for SFTTrainer
+    # This is often required or preferred by Unsloth's SFTTrainer
+    def format_dataset_for_sft(examples):
+        # examples['messages'] is a list of message lists (one for each example in the batch)
+        texts = []
+        for single_example_messages in examples['messages']:
+            formatted_str = tokenizer.apply_chat_template(
+                single_example_messages,
+                tokenize=False,
+                add_generation_prompt=False # Important for SFT
+            )
+            texts.append(formatted_str)
+        return {"text": texts}
+
+    train_dataset = train_dataset.map(format_dataset_for_sft, batched=True)
+    print(f"Formatted SFT dataset. Now has a 'text' column.")
+    if 'text' in train_dataset.column_names:
+        print(f"First SFT training example (formatted text): {train_dataset[0]['text']}")
+    else:
+        print("Warning: 'text' column not found after mapping. Check formatting function.")
 
     # 3. Set up TrainingArguments and SFTTrainer
     # ==================================================
@@ -141,12 +162,8 @@ def main():
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
-        dataset_text_field=None,  # Not needed if dataset has 'messages' or formatting_func is used
-                                  # If you had a single string column, you'd specify it here.
-        formatting_func=None,     # Not needed as our dataset already has 'messages' column in Unsloth/TRL SFT format.
-                                  # If formatting_func is provided, it takes a dataset example and returns a list of strings.
-                                  # Unsloth examples often directly prepare a text column after applying chat template.
-                                  # However, passing 'messages' column directly to SFTTrainer is also a common pattern for TRL.
+        dataset_text_field="text",  # Use the newly created 'text' column
+        formatting_func=None,     # Dataset is already formatted
         args=training_args,
         max_seq_length=MAX_SEQ_LENGTH,
         packing=True, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
