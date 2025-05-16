@@ -18,8 +18,11 @@ DEFAULT_MODEL_PATH = "Qwen/Qwen2-0.5B-Instruct" # Base model for testing before 
 #    MODEL_TO_LOAD = SFT_CHECKPOINT_ON_DRIVE 
 #    or
 #    MODEL_TO_LOAD = GRPO_CHECKPOINT_ON_DRIVE
-# For now, defaulting to base model for template clarity:
-MODEL_TO_LOAD = DEFAULT_MODEL_PATH
+
+# Set this to your trained SFT model checkpoint path
+DRIVE_OUTPUT_BASE_INFERENCE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
+TRAINED_CKPT_PATH = os.path.join(DRIVE_OUTPUT_BASE_INFERENCE, "sft_qwen2.5_0.5b_standard", "final_checkpoint")
+MODEL_TO_LOAD = TRAINED_CKPT_PATH
 
 MAX_SEQ_LENGTH = 2048
 LOAD_IN_4BIT = True
