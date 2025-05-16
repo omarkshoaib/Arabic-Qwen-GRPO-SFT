@@ -86,12 +86,13 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def main():
     # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=torch.float16 (T4 GPU doesn't support bfloat16)")
+    print(f"DEBUG: Attempting to load model {MODEL_TO_SFT} with dtype=None and fuse_attention=False to avoid Triton kernel errors")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_TO_SFT, # Use MODEL_TO_SFT here
         max_seq_length=MAX_SEQ_LENGTH,
-        dtype=torch.float16,  # Use float16 since T4 doesn't support bfloat16
+        dtype=None,  # Let Unsloth auto-select based on hardware
         load_in_4bit=True,
+        fuse_attention=False,  # Disable Unsloth's custom Triton kernels to avoid compilation errors
         # token = "hf_..." # Add your Hugging Face token if loading private models or specific revisions
     )
     print(f"Loaded model {MODEL_TO_SFT} with Unsloth.")
@@ -234,8 +235,8 @@ def main():
         formatting_func=None,     # Dataset is already formatted and tokenized
         args=training_args,
         max_seq_length=MAX_SEQ_LENGTH,
-        packing=False, # Packs multiple short examples into one sequence for efficiency - Unsloth recommends this.
-                      # `packing=True` is generally preferred with `SFTDataCollator`.
+        packing=False,  # Disable packing to avoid optimization paths that might trigger Triton errors
+                       # `packing=True` is generally preferred with `SFTDataCollator`.
         # dataset_kwargs={"skip_prepare_dataset" : True}, # Added because Unsloth example did so
     )
     print("SFTTrainer initialized.")
