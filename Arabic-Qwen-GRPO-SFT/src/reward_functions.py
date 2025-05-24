@@ -406,7 +406,7 @@ if __name__ == '__main__':
     # Example Usage and Testing
     sample_completions = [
         "الإجابة هي اثنان لأن واحد زائد واحد يساوي اثنان.", # Good
-        "I don't know the answer.", # Bad - English
+        "I don't know the sdsds.", # Bad - English
         "الجواب هو ثلاثة. لماذا تسأل؟", # Okay, but repeats question word
         "ما هو الجواب؟", # Bad - just a question
         "", # Bad - empty
