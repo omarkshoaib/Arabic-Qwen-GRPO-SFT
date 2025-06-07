@@ -1,314 +1,275 @@
-#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-
 import re
 import numpy as np
 import torch
-from transformers import AutoTokenizer
+# from transformers import AutoTokenizer # Not needed if tokenizer is passed to grpo_reward_function_unsloth
+from langdetect import detect # For language consistency reward
+import math # For cosine scaled reward
 
-# Basic Arabic character detection (you might want a more robust library for this)
-def is_arabic_char(char):
-    return '\\u0600' <= char <= '\\u06FF' or \
-           '\\u0750' <= char <= '\\u077F' or \
-           '\\uFB50' <= char <= '\\uFDFF' or \
-           '\\uFE70' <= char <= '\\uFEFF'
+# Project-specific import for number normalization
+from src.data_loader import normalize_arabic_numbers # Used by accuracy_reward
 
-def reward_arabic_only(completions, penalty_factor=10.0):
+# ==============================================================================
+# DeepSeek R1-Zero Inspired Reward Functions (adapted for Arabic)
+# ==============================================================================
+
+def accuracy_reward(completions: list[str], solutions: list[str], **kwargs) -> list[float]:
     """
-    Rewards completions that are entirely in Arabic.
-    Penalizes completions with non-Arabic characters.
+    Reward function to check if the model's *extracted answer* from its completion
+    matches the *extracted answer* from the ground truth solution.
+    This uses string comparison for Arabic numbers, not mathematical equivalence.
+    Expected format in `solutions` is "<think>...</think><answer>...</answer>".
     """
-    scores = []
-    for completion in completions:
-        if not completion:
-            scores.append(-penalty_factor) # Penalize empty completions
-            continue
+    rewards = []
+
+    for content, sol in zip(completions, solutions):
+        # Extract predicted answer from model's completion
+        answer_match_pred = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
+        predicted_answer = normalize_arabic_numbers(answer_match_pred.group(1).strip()) if answer_match_pred else ""
         
-        arabic_chars = sum(1 for char in completion if is_arabic_char(char))
-        total_chars = len(completion)
+        # Extract true answer from ground truth solution
+        answer_match_true = re.search(r"<answer>(.*?)</answer>", sol, re.DOTALL)
+        true_answer = normalize_arabic_numbers(answer_match_true.group(1).strip()) if answer_match_true else ""
         
-        if total_chars == 0: # Should be caught by 'if not completion'
-             scores.append(-penalty_factor)
-             continue
+        # Determine reward based on strict string equality
+        reward = 1.0 if predicted_answer == true_answer and true_answer != "" else 0.0 # Also penalize empty true_answer
+        rewards.append(reward)
+    return rewards
 
-        ratio_arabic = arabic_chars / total_chars
-        
-        if ratio_arabic == 1.0:
-            scores.append(penalty_factor / 2)  # Max positive reward for fully Arabic
-        elif ratio_arabic > 0.9: # Tolerating a very small amount of non-Arabic (e.g. numbers, critical punctuation)
-            scores.append(penalty_factor / 4) # Smaller positive reward
-        else:
-            # Penalize proportionally to non-Arabic content
-            scores.append(-penalty_factor * (1.0 - ratio_arabic))
-    return scores
-
-def reward_length(completions, target_length=50, penalty_per_char=0.1, positive_reward_for_exact=0.5, positive_reward_for_close=0.2):
+def format_reward(completions: list[str], **kwargs) -> list[float]:
     """
-    Rewards completions for being close to a target length.
-    Penalizes based on the absolute difference from the target length.
-    Can return small positive scores for good length.
+    Reward function to check if the completion has the correct format:
+    <think>...</think><answer>...</answer>.
+    Rewards for correct presence and order of tags. Penalizes malformed or missing tags.
     """
     scores = []
-    for completion in completions:
-        if not completion:
-            scores.append(-target_length * penalty_per_char * 2) # Heavy penalty for empty
-            continue
-        
-        comp_len = len(completion)
-        diff = abs(comp_len - target_length)
-
-        if diff == 0:
-            scores.append(positive_reward_for_exact)  # Positive reward for perfect length
-        elif diff <= target_length * 0.15: # Within 15% of target length (e.g., +/- 7 chars for target 50)
-             # Gradual positive reward, higher closer to 0 diff
-            scores.append(positive_reward_for_close * (1 - (diff / (target_length * 0.15))))
-        else:
-            # Penalty increases with difference
-            # Basic penalty for being outside the "close" range, plus per-character penalty
-            base_penalty_for_missing_close_range = 0.1 
-            scores.append(-(base_penalty_for_missing_close_range + (diff * penalty_per_char)))
-    return scores
-
-# Example keywords - these should be tailored to your specific reasoning tasks
-KEYWORDS_TO_REWARD_AR = [
-    "لأن", "بسبب", "وبالتالي", "إذاً", "إذن", "نتيجة لذلك", 
-    "بما أن", "حيث أن", "وفقًا لـ", "يشير إلى", "يدل على", "يعني أن",
-    "الخطوة الأولى", "الخطوة التالية", "أخيراً", "في الختام" # Reasoning/structure words
-]
-KEYWORDS_TO_PENALIZE_AR = [
-    "أنا آسف", "لا أعرف", "لست متأكدا", "غير قادر على", "ليس لدي معلومات",
-    "مرحباً", "أهلاً" # Generic, non-task-focused greetings if the task is specific
-] 
-# Arabic question words (common ones)
-ARABIC_QUESTION_WORDS = [
-    "هل", "ماذا", "ما", "لماذا", "متى", "أين", "كيف", "كم", "من", "أي"
-]
-
-
-# Suggestion: Add a comment to guide users on evolving this reward function.
-# For example, to make it more like a 'Reasoning Steps Reward' (from code.ipynb idea),
-# one could refine `keywords_to_reward` to include more Arabic structural reasoning words
-# (e.g., "أولاً", "ثانياً", "بالتالي", "الخطوة ١", "الاستنتاج هو") and adjust weights.
-# The current implementation is a good starting point for keyword spotting.
-def reward_contains_keywords(completions, keywords, reward_value=0.5):
-    """
-    Rewards completions that contain any of the specified keywords.
-    """
-    scores = []
-    for completion in completions:
-        if not completion:
-            scores.append(0) # No reward for empty string
-            continue
-        if any(keyword in completion for keyword in keywords):
-            scores.append(reward_value)
-        else:
-            scores.append(0)
-    return scores
-
-def reward_not_contains_forbidden_keywords(completions, forbidden_keywords, penalty_value=1.0):
-    """
-    Penalizes completions that contain any of the forbidden keywords.
-    """
-    scores = []
-    for completion in completions:
-        if not completion:
-            scores.append(0) # No penalty for empty
-            continue
-        if any(keyword in completion for keyword in forbidden_keywords):
-            scores.append(-penalty_value)
-        else:
-            scores.append(0) # No penalty if no forbidden keywords
-    return scores
-
-def reward_question_words_not_in_answer(completions, prompts, question_words, penalty_value=0.5):
-    """
-    Penalizes if question words from the prompt (or general question words)
-    are repeated in the completion, unless the completion itself is a question.
-    This version is simplified to check against a general list of question words.
-    A more advanced version would extract question words from the specific prompt.
-    """
-    scores = []
-    for i, completion in enumerate(completions):
-        if not completion:
-            scores.append(0)
-            continue
-            
-        # Simple check: if completion ends with '؟', it's a question, so don't penalize
-        if completion.strip().endswith("؟"):
-            scores.append(0)
-            continue
-
-        penalty = 0
-        for qw in question_words:
-            if qw in completion:
-                penalty = -penalty_value
-                break 
-        scores.append(penalty)
-    return scores
-
-def reward_think_answer_tags(completions, think_tag_pair=("<think>", "</think>"), answer_tag_pair=("<answer>", "</answer>"), reward_value=1.0, penalty_value=-1.0, order_penalty=-0.5):
-    """
-    Rewards completions that correctly use <think>...</think> and <answer>...</answer> tags in order.
-    - reward_value: given if both tags are present, complete, and in order.
-    - penalty_value: given if a tag is opened but not closed, or if a pair is missing.
-    - order_penalty: additional penalty if <answer> appears before <think>.
-    """
-    scores = []
-    think_open, think_close = think_tag_pair
-    answer_open, answer_close = answer_tag_pair
+    think_open, think_close = "<think>", "</think>"
+    answer_open, answer_close = "<answer>", "</answer>"
 
     for comp in completions:
-        score = 0
-        think_present_complete = False
-        answer_present_complete = False
-        think_start_idx, think_end_idx = -1, -1
-        answer_start_idx, answer_end_idx = -1, -1
+        score = 0.0
+        # Check for presence and completeness of tags
+        think_starts = [m.start() for m in re.finditer(re.escape(think_open), comp)]
+        think_ends = [m.start() for m in re.finditer(re.escape(think_close), comp)]
+        answer_starts = [m.start() for m in re.finditer(re.escape(answer_open), comp)]
+        answer_ends = [m.start() for m in re.finditer(re.escape(answer_close), comp)]
 
-        try:
-            think_start_idx = comp.index(think_open)
-            think_end_idx = comp.index(think_close, think_start_idx + len(think_open))
-            think_present_complete = True
-        except ValueError:
-            # Check for incomplete think tags
-            if think_open in comp and think_close not in comp[comp.find(think_open):]:
-                score += penalty_value
-            elif think_close in comp and think_open not in comp[:comp.find(think_close)]:
-                score += penalty_value
-            # If neither part of think tag is present, it's just missing, not necessarily a penalty yet unless required.
-
-        try:
-            answer_start_idx = comp.index(answer_open)
-            answer_end_idx = comp.index(answer_close, answer_start_idx + len(answer_open))
-            answer_present_complete = True
-        except ValueError:
-            # Check for incomplete answer tags
-            if answer_open in comp and answer_close not in comp[comp.find(answer_open):]:
-                score += penalty_value
-            elif answer_close in comp and answer_open not in comp[:comp.find(answer_close)]:
-                score += penalty_value
-
-        if think_present_complete and answer_present_complete:
-            score += reward_value
-            if think_start_idx > answer_start_idx : # Think should come before answer
-                score += order_penalty # Penalize if answer tag appears before think tag
-        elif think_present_complete and not answer_present_complete: # Think is there, answer is missing/incomplete
-            score += penalty_value / 2 # Penalize missing answer less than malformed
-        elif not think_present_complete and answer_present_complete: # Answer is there, think is missing/incomplete
-            score += penalty_value / 2 # Penalize missing think
-        else: # Both are missing or both are malformed in a way not caught above (e.g. only open tags for both)
-            # If neither are present at all, this could be fine if not required by prompt.
-            # If some part of them are present but incomplete, already penalized.
-            # If completely absent, and they *were* expected, this is a general failure.
-            # Let's assume a baseline where not having them if not malformed is not explicitly penalized here,
-            # but the lack of reward_value serves as an implicit penalty.
-            # However, if there's an expectation (e.g. from system prompt) then this might need explicit penalty.
-            # For now, if neither are complete, the score remains low due to lack of reward_value.
-            # To be more aggressive, if not (think_present_complete or answer_present_complete): score += penalty_value
-            pass
-
+        has_think_pair = len(think_starts) == 1 and len(think_ends) == 1 and think_starts[0] < think_ends[0]
+        has_answer_pair = len(answer_starts) == 1 and len(answer_ends) == 1 and answer_starts[0] < answer_ends[0]
+        
+        if has_think_pair and has_answer_pair:
+            # Check correct order: <think> before <answer>
+            if think_starts[0] < answer_starts[0]:
+                score = 1.0 # Perfect format
+            else:
+                score = -0.5 # Incorrect order penalty
+        elif has_think_pair or has_answer_pair:
+            score = -0.25 # Partial presence, implies incomplete format
+        else:
+            score = -1.0 # No recognized tags or completely malformed
+        
+        # Additional small penalty for multiple occurrences of tags
+        if len(think_starts) > 1 or len(think_ends) > 1 or \
+           len(answer_starts) > 1 or len(answer_ends) > 1:
+            score -= 0.1 # Small penalty for ambiguity
 
         scores.append(score)
     return scores
 
+def reasoning_steps_reward(completions: list[str], **kwargs) -> list[float]:
+    """
+    Reward function to encourage clear step-by-step reasoning using Arabic indicators.
+    It looks for patterns like "الخطوة ١:", "أولاً", numbered lists, bullet points, and transition words.
+    """
+    # Regex pattern to find indicators of reasoning steps in Arabic
+    pattern = r"(الخطوة\s*\d+:|^\d+\.\s*|^\-\s*|^\*\s*|أولاً|ثانياً|ثالثاً|أخيراً|الاستنتاج|بالتالي|إذن|إذاً|بما\s*أن|حيث\s*أن)"
+    
+    completion_contents = completions # Already strings
+    matches = [len(re.findall(pattern, content, re.MULTILINE | re.IGNORECASE)) # IGNORECASE for robustness
+               for content in completion_contents]
 
-# --- Combined Reward Function for GRPO ---
-# This is where you'll combine the above functions.
-# The `batch` argument in GRPO's reward function typically contains tokenized prompts and other info.
-# You'll need to decode prompts if you need their text content.
+    # Reward is proportional to the number of reasoning steps, maxing out at 1.0
+    # Encourage at least 3 steps for full reward, adjust as needed.
+    return [min(1.0, count / 3.0) for count in matches]
+
+def get_cosine_scaled_reward(
+    min_value_wrong: float = -0.5,
+    max_value_wrong: float = -0.1,
+    min_value_correct: float = 0.8,
+    max_value_correct: float = 1.0,
+    max_len: int = 1000,
+):
+    """
+    Returns a cosine scaled reward function. This function scales the accuracy reward
+    based on completion length. Shorter correct solutions get higher rewards,
+    longer incorrect solutions get less penalty.
+    """
+    def cosine_scaled_reward(completions: list[str], solutions: list[str], accuracy_rewards: list[float], **kwargs) -> list[float]:
+        rewards = []
+
+        for content, sol, acc_reward in zip(completions, solutions, accuracy_rewards):
+            gen_len = len(content.split())  # Length by words, not characters for better robustness
+            
+            # Clamp progress to [0, 1] to avoid math domain errors or unexpected behavior
+            progress = min(1.0, gen_len / max_len) 
+            
+            cosine = math.cos(progress * math.pi) # Cosine value based on progress
+
+            if acc_reward > 0.5: # Assuming accuracy_reward gives ~1.0 for correct answers
+                min_val = min_value_correct
+                max_val = max_value_correct
+            else: # Incorrect answer
+                min_val = max_value_wrong  # Note the swap!
+                max_val = min_value_wrong
+
+            # Cosine scaling formula: scales a value from [0, 1] to [min_val, max_val]
+            # When progress is 0 (short), cosine is 1, reward is max_val
+            # When progress is 1 (long), cosine is -1, reward is min_val
+            reward = min_val + 0.5 * (max_val - min_val) * (1.0 + cosine)
+            rewards.append(float(reward))
+        return rewards
+    return cosine_scaled_reward
+
+def get_repetition_penalty_reward(ngram_size: int = 3, max_penalty: float = -0.1) -> callable:
+    """
+    Returns a repetition penalty reward function. Penalizes repetitions of n-grams
+    in the generated text.
+    """
+    if max_penalty > 0:
+        raise ValueError(f"max_penalty {max_penalty} should not be positive")
+
+    def repetition_penalty_reward(completions: list[str], **kwargs) -> list[float]:
+        rewards = []
+        for completion in completions:
+            if completion == "":
+                rewards.append(0.0) # No penalty for empty completions
+                continue
+            
+            words = completion.lower().split() # Lowercase and split into words
+            if len(words) < ngram_size: # No penalty for short completions that can't form n-grams
+                rewards.append(0.0)
+                continue
+
+            ngrams = set() # Use a set to store unique n-grams
+            total_ngrams_count = 0
+            
+            # Generate n-grams
+            for i in range(len(words) - ngram_size + 1):
+                ng = tuple(words[i : i + ngram_size])
+                ngrams.add(ng)
+                total_ngrams_count += 1
+
+            if total_ngrams_count == 0: # Avoid division by zero for very short texts
+                rewards.append(0.0)
+                continue
+
+            # Calculate scaling factor: more repetition -> higher scaling (closer to 1)
+            # less repetition -> lower scaling (closer to 0)
+            scaling = 1 - (len(ngrams) / total_ngrams_count)
+            reward = scaling * max_penalty # Apply penalty based on scaling
+            rewards.append(reward)
+        return rewards
+    return repetition_penalty_reward # Corrected: return the outer function itself
+
+# Added from your previous full code for Arabic specific system prompt
+def language_consistency_reward(completions: list[str], **kwargs) -> list[float]:
+    """
+    Reward function to ensure responses are predominantly in Arabic.
+    Uses langdetect library.
+    """
+    rewards = []
+    for content in completions:
+        try:
+            # Short contents might cause langdetect.errors.LangDetectException
+            if len(content.strip()) < 5: # Min length for reliable detection
+                reward = 0.5 # Neutral for very short or empty strings
+            else:
+                lang = detect(content)
+                # Max reward for Arabic, harsh penalty if not Arabic
+                reward = 1.0 if lang == "ar" else 0.0 
+        except Exception:
+            # If detection fails (e.g., very short string, special characters), assume neutral
+            reward = 0.5 
+        rewards.append(reward)
+    return rewards
+
+# ==============================================================================
+# Combined Reward Functions
+# ==============================================================================
 
 def get_reward_config():
-    """Returns a default configuration for reward weights and keywords."""
+    """
+    Returns a default configuration for reward weights and parameters.
+    These weights are for the combined reward pipeline.
+    """
     return {
         "weights": {
-            "length": 0.1,
-            "arabic_only": 0.4,
-            "contains_keywords": 0.2,
-            "not_contains_forbidden": 0.2,
-            "question_words_not_in_answer": 0.1,
-            "think_answer_tags": 0.3,
+            "accuracy": 0.4, # High weight for correctness
+            "format": 0.2,   # Important for structured output
+            "reasoning_steps": 0.15, # Encourage showing work
+            "language_consistency": 0.15, # Ensure Arabic output
+            "cosine_scaled": 0.05, # Mildly encourage conciseness / penalize long incorrect
+            "repetition_penalty": 0.05, # Penalize repetition
         },
-        "target_length": 70, # Adjusted target length
-        "length_penalty_per_char": 0.05, # Reduced penalty per char
-        "arabic_penalty_factor": 10.0,
-        "reward_keywords_value": 1.0, # Increased reward for good keywords
-        "forbidden_penalty_value": 2.0, # Increased penalty for bad keywords
-        "q_words_penalty_value": 1.0, # Increased penalty for repeating q-words
-        "keywords_to_reward": KEYWORDS_TO_REWARD_AR,
-        "keywords_to_penalize": KEYWORDS_TO_PENALIZE_AR,
-        "arabic_question_words": ARABIC_QUESTION_WORDS,
-        "clamp_rewards": {"min": -5.0, "max": 5.0}, # Optional clamping for total reward
-        "think_answer_reward_value": 1.0,
-        "think_answer_penalty_value": -1.0,
-        "think_answer_order_penalty": -0.5,
+        # Parameters for specific reward functions
+        "cosine_min_value_wrong": -0.5,
+        "cosine_max_value_wrong": -0.1,
+        "cosine_min_value_correct": 0.8,
+        "cosine_max_value_correct": 1.0,
+        "cosine_max_len": 500, # Max words for scaling. Adjust based on expected output length.
+        "repetition_ngram_size": 3,
+        "repetition_max_penalty": -0.1,
+        "clamp_rewards": {"min": -2.0, "max": 2.0}, # Clamp total rewards
     }
 
-def combined_reward_pipeline(completions, prompts_text, reward_config):
+def combined_reward_pipeline(completions: list[str], prompts_text: list[str], solutions: list[str], reward_config: dict) -> list[float]:
     """
-    Calculates a combined reward for a list of completions based on a list of text prompts.
+    Calculates a combined reward for a list of completions based on specified criteria.
     
     Args:
         completions (list[str]): A list of generated text completions.
-        prompts_text (list[str]): A list of corresponding text prompts.
+        prompts_text (list[str]): A list of corresponding text prompts (for context).
+        solutions (list[str]): A list of ground truth solutions (for accuracy).
         reward_config (dict): Configuration for reward functions and weights.
 
     Returns:
-        list[float]: A list of reward scores for each completion.
+        list[float]: A list of total reward scores for each completion.
     """
     final_rewards = []
-
-    # Ensure prompts_text is a list of the same effective batch size as completions might be (due to num_generations)
-    # If num_generations_per_prompt = N, completions will be N * original_batch_size
-    # prompts_text should be [prompt1, prompt1, ..., prompt2, prompt2, ...]
-    # This needs to be handled by the caller or GRPOTrainer's batching.
-    # For now, assume prompts_text is already correctly tiled or matched.
-
     num_completions = len(completions)
-    num_prompts = len(prompts_text)
-
-    if num_completions == 0:
-        return []
-
-    # Basic check: if completions is a multiple of prompts, assume generations per prompt
-    # This is a simplification; the GRPOTrainer usually handles this alignment.
-    if num_prompts > 0 and num_completions % num_prompts == 0:
-        generations_per_prompt = num_completions // num_prompts
-        expanded_prompts = [p for p in prompts_text for _ in range(generations_per_prompt)]
-    else:
-        # Fallback or error: if alignment is unclear, pair one-to-one or raise error
-        # For simplicity, let's assume they are meant to align if counts differ but not by exact multiple
-        expanded_prompts = prompts_text * (num_completions // num_prompts + 1) if num_prompts > 0 else [""] * num_completions
-        expanded_prompts = expanded_prompts[:num_completions]
-
-
     cfg = reward_config
     w = cfg["weights"]
 
-    r_len_scores = reward_length(
-        completions, 
-        target_length=reward_config.get("target_length", 70),
-        penalty_per_char=reward_config.get("length_penalty_per_char", 0.05),
-        positive_reward_for_exact=reward_config.get("length_positive_exact", 0.5),
-        positive_reward_for_close=reward_config.get("length_positive_close", 0.2)
+    # Calculate individual reward components
+    acc_scores = accuracy_reward(completions, solutions)
+    fmt_scores = format_reward(completions)
+    rs_scores = reasoning_steps_reward(completions)
+    lang_scores = language_consistency_reward(completions) # No prompts needed here
+
+    # Cosine scaled reward needs accuracy_rewards and solutions
+    cosine_fn = get_cosine_scaled_reward(
+        min_value_wrong=cfg["cosine_min_value_wrong"],
+        max_value_wrong=cfg["cosine_max_value_wrong"],
+        min_value_correct=cfg["cosine_min_value_correct"],
+        max_value_correct=cfg["cosine_max_value_correct"],
+        max_len=cfg["cosine_max_len"],
     )
-    r_arabic_scores = reward_arabic_only(completions, cfg["arabic_penalty_factor"])
-    r_keywords_scores = reward_contains_keywords(completions, cfg["keywords_to_reward"], cfg["reward_keywords_value"])
-    r_forbidden_scores = reward_not_contains_forbidden_keywords(completions, cfg["keywords_to_penalize"], cfg["forbidden_penalty_value"])
-    # For reward_question_words_not_in_answer, it needs prompts.
-    r_q_words_scores = reward_question_words_not_in_answer(completions, expanded_prompts, cfg["arabic_question_words"], cfg["q_words_penalty_value"])
-    r_think_answer_tags_scores = reward_think_answer_tags(
-        completions, 
-        reward_value=reward_config.get("think_answer_reward_value", 1.0),
-        penalty_value=reward_config.get("think_answer_penalty_value", -1.0),
-        order_penalty=reward_config.get("think_answer_order_penalty", -0.5)
+    cos_scores = cosine_fn(completions, solutions, acc_scores)
+
+    # Repetition penalty reward
+    rep_fn = get_repetition_penalty_reward(
+        ngram_size=cfg["repetition_ngram_size"],
+        max_penalty=cfg["repetition_max_penalty"],
     )
-    
+    rep_scores = rep_fn(completions)
+
     for i in range(num_completions):
         total_reward = (
-            w["length"] * r_len_scores[i] +
-            w["arabic_only"] * r_arabic_scores[i] +
-            w["contains_keywords"] * r_keywords_scores[i] +
-            w["not_contains_forbidden"] * r_forbidden_scores[i] +
-            w["question_words_not_in_answer"] * r_q_words_scores[i] +
-            w["think_answer_tags"] * r_think_answer_tags_scores[i]
+            w["accuracy"] * acc_scores[i] +
+            w["format"] * fmt_scores[i] +
+            w["reasoning_steps"] * rs_scores[i] +
+            w["language_consistency"] * lang_scores[i] +
+            w["cosine_scaled"] * cos_scores[i] +
+            w["repetition_penalty"] * rep_scores[i]
         )
         
         if "clamp_rewards" in cfg and cfg["clamp_rewards"]:
@@ -316,109 +277,105 @@ def combined_reward_pipeline(completions, prompts_text, reward_config):
             
         final_rewards.append(total_reward)
         
+        # Detailed print for debugging and understanding
+        print(f"\n--- Completion {i+1} Analysis ---")
+        print(f"Completion: {completions[i][:150]}...")
+        print(f"Prompt: {prompts_text[i][:100]}...")
+        print(f"Solution: {solutions[i][:100]}...")
+        print(f"  Accuracy Reward: {acc_scores[i]:.4f} (Weight: {w['accuracy']})")
+        print(f"  Format Reward: {fmt_scores[i]:.4f} (Weight: {w['format']})")
+        print(f"  Reasoning Steps Reward: {rs_scores[i]:.4f} (Weight: {w['reasoning_steps']})")
+        print(f"  Language Consistency Reward: {lang_scores[i]:.4f} (Weight: {w['language_consistency']})")
+        print(f"  Cosine Scaled Reward: {cos_scores[i]:.4f} (Weight: {w['cosine_scaled']})")
+        print(f"  Repetition Penalty Reward: {rep_scores[i]:.4f} (Weight: {w['repetition_penalty']})")
+        print(f"  Total Reward: {final_rewards[i]:.4f}")
+
     return final_rewards
 
-# Wrapper for GRPOTrainer
-# The GRPOTrainer expects a function that takes `completions` (list of str), 
-# and `**kwargs` which will contain the tokenized `batch`.
-# We need to decode the prompts from the batch.
-def grpo_reward_function_unsloth(completions, tokenizer, reward_config, **kwargs):
+def grpo_reward_function_unsloth(completions: list[str], tokenizer, reward_config: dict, **kwargs) -> torch.Tensor:
     """
     Adapter function for GRPOTrainer.
-    `completions` here are the generated sequences (potentially token IDs or text).
+    `completions` here are the generated sequences (list of strings).
     `kwargs` will contain `prompt_input_ids` or `query_input_ids` (representing prompts),
              and `generated_input_ids` (representing completions from the policy model).
              It might also contain `reference_generated_input_ids` (from reference model, if used).
-
-    The GRPOTrainer expects a list or tensor of rewards, one for each generated sequence.
+    The GRPOTrainer expects a torch.Tensor of rewards, one for each generated sequence.
     """
-    # Extract generated texts (completions)
-    # `completions` argument from GRPOTrainer.compute_rewards is usually the text itself.
-    # If it were token IDs (`generated_input_ids`), we'd decode. Let's assume it's text for now.
-    
-    # The `completions` argument passed by GRPOTrainer to its `reward_fn`
-    # is a list of strings (the generated texts).
-    generated_texts = completions # Directly use if they are strings
+    generated_texts = completions
 
     # Extract prompt texts
-    # GRPOTrainer provides prompt context in kwargs.
-    # Check for typical keys used by TRL/GRPO for prompt token IDs.
+    prompt_token_ids = None
     if "prompt_input_ids" in kwargs:
         prompt_token_ids = kwargs["prompt_input_ids"]
-    elif "query_input_ids" in kwargs: # DPO/IPO style
+    elif "query_input_ids" in kwargs: 
         prompt_token_ids = kwargs["query_input_ids"]
-    elif "input_ids" in kwargs: # Sometimes the full input (prompt + completion) is passed
-        # This case needs careful handling to separate prompt from completion if not already done.
-        # For GRPO, usually prompt and completion are more distinct.
-        # We'll prioritize specific prompt ID keys.
-        # If this is hit, it means `completions` might not be just the completion part.
-        # However, GRPOTrainer usually calls reward_fn with (completions_text, **batch_elements)
-        # where batch_elements would contain the prompt_input_ids.
-        prompt_token_ids = kwargs["input_ids"] # Fallback, might need slicing if it includes completion
-    else:
-        # This case should ideally not happen if GRPOTrainer is calling correctly.
-        # If prompts are absolutely needed and not found, raise error or return default penalty.
-        # For now, assume some reward components don't need prompts, or create dummy prompts.
-        # print("Warning: Prompt token IDs not found in kwargs. Some reward functions might be affected.")
-        prompts_text = ["" for _ in generated_texts] # Dummy prompts
+    elif "input_ids" in kwargs: 
+        prompt_token_ids = kwargs["input_ids"]
 
-    if "prompt_input_ids" in kwargs or "query_input_ids" in kwargs :
-        # Decode prompt token IDs to text
-        # Ensure tokenizer.batch_decode handles list of lists of token_ids correctly if that's the structure
-        # GRPOTrainer's batch usually provides prompts already padded/truncated as needed.
-        
-        # If prompt_token_ids is a list of tensors, convert to list of lists of ints
+    prompts_text = [""] * len(generated_texts) # Default to empty prompts if not found
+    if prompt_token_ids is not None:
         if isinstance(prompt_token_ids, torch.Tensor):
-            prompt_token_ids = prompt_token_ids.tolist()
-        
-        prompts_text = tokenizer.batch_decode(prompt_token_ids, skip_special_tokens=True)
+            prompt_token_ids_list = prompt_token_ids.tolist()
+        else:
+            prompt_token_ids_list = prompt_token_ids
 
-    # Ensure prompts_text aligns with generated_texts if multiple generations per prompt
-    # GRPOTrainer's `_generate_completions` handles num_return_sequences internally
-    # and the `completions` passed to reward_fn should match the batch size after generation.
-    # If `len(prompts_text)` is `B` and `num_generations_per_prompt` is `N`, 
-    # then `len(generated_texts)` will be `B * N`.
-    # We need to align prompts_text: [p1, p1, ..., pN, p2, p2, ..., pN, ...]
-    
-    num_generations_per_prompt = 1 # Default assumption
-    if generated_texts and prompts_text and len(generated_texts) > len(prompts_text):
-        if len(generated_texts) % len(prompts_text) == 0:
-            num_generations_per_prompt = len(generated_texts) // len(prompts_text)
-    
-    aligned_prompts_text = []
-    if num_generations_per_prompt > 1:
-        for p_text in prompts_text:
+        decoded_prompts = tokenizer.batch_decode(prompt_token_ids_list, skip_special_tokens=True)
+        
+        num_prompts_in_batch = len(prompt_token_ids_list)
+        num_generations_per_prompt = len(generated_texts) // num_prompts_in_batch if num_prompts_in_batch > 0 else 1
+        
+        aligned_prompts_text = []
+        for p_text in decoded_prompts:
             aligned_prompts_text.extend([p_text] * num_generations_per_prompt)
         prompts_text = aligned_prompts_text
-    elif not prompts_text and generated_texts: # If prompts couldn't be decoded but have completions
-        prompts_text = ["" for _ in generated_texts]
+    
+    # Extract solutions from the batch if available
+    solutions = kwargs.get("solutions", []) 
 
+    # If solutions array is shorter than completions, expand it
+    if len(solutions) > 0 and len(generated_texts) > len(solutions):
+        aligned_solutions = []
+        num_solutions_in_batch = len(solutions)
+        num_generations_per_solution = len(generated_texts) // num_solutions_in_batch if num_solutions_in_batch > 0 else 1
+        for sol_text in solutions:
+            aligned_solutions.extend([sol_text] * num_generations_per_solution)
+        solutions = aligned_solutions
+    elif not solutions: # If no solutions provided, use empty strings
+        solutions = [""] * len(generated_texts)
 
     if not generated_texts:
         return torch.tensor([], dtype=torch.float32) # Return empty tensor if no completions
 
     # Call the existing combined reward pipeline
-    rewards = combined_reward_pipeline(generated_texts, prompts_text, reward_config)
+    rewards = combined_reward_pipeline(generated_texts, prompts_text, solutions, reward_config)
     
     # Convert to tensor for GRPOTrainer
     return torch.tensor(rewards, dtype=torch.float32)
 
 
 if __name__ == '__main__':
-    # Example Usage and Testing
-    sample_completions = [
-        "الإجابة هي اثنان لأن واحد زائد واحد يساوي اثنان.", # Good
-        "I don't know the answer.", # Bad - English
-        "الجواب هو ثلاثة. لماذا تسأل؟", # Okay, but repeats question word
-        "ما هو الجواب؟", # Bad - just a question
-        "", # Bad - empty
-        "بسبب الأمطار الغزيرة، تأخر القطار. وبالتالي، يجب أن ننتظر.", # Good reasoning example
-        "أنا آسف، لا يمكنني المساعدة في هذا.", # Bad - forbidden keyword
-        "هذه جملة عربية طويلة جدا جدا جدا تمتد لأكثر من خمسين حرفا لكي نختبر طول النص وكيف يتم تقييمه.", # Length test
-        "قطة." # Short, Arabic
-    ]
-    
-    # Mock prompts (in a real scenario, these come from the batch)
+    # This block is for testing the reward functions independently
+    # It simulates input to the reward functions.
+
+    print("--- Testing Reward Functions (Arabic Adaptation) ---")
+
+    # Mock tokenizer (for `grpo_reward_function_unsloth`)
+    class MockTokenizer:
+        def batch_decode(self, token_ids, skip_special_tokens=True):
+            # A very simplified mock for decoding token IDs
+            decoded_texts = []
+            for ids in token_ids:
+                if isinstance(ids, list): # Handle lists of lists of ints
+                    text = f"Decoded_Prompt_{hash(tuple(ids)) % 1000}" # Just a placeholder
+                else: # Handle single list of ints (e.g. from single prompt)
+                    text = f"Decoded_Prompt_{hash(tuple(ids)) % 1000}" # Just a placeholder
+                decoded_texts.append(text)
+            return decoded_texts
+
+    mock_tokenizer_for_tests = MockTokenizer()
+    reward_cfg = get_reward_config()
+
+    # --- Sample data for testing (All lists are now length 9) ---
     sample_prompts = [
         "ما هو ناتج واحد زائد واحد؟",
         "Why is the sky blue?",
@@ -431,170 +388,83 @@ if __name__ == '__main__':
         "اكتب كلمة واحدة."
     ]
 
-    # Ensure sample_prompts aligns with sample_completions if combined_reward_pipeline expects it
-    # If GRPOTrainer handles generation (e.g. 4 generations per prompt), then completions list is longer.
-    # For this test, let's assume 1 completion per prompt for simplicity of testing combined_reward_pipeline directly
-    if len(sample_completions) != len(sample_prompts):
-        print(f"Warning: Mismatch in length of sample completions ({len(sample_completions)}) and prompts ({len(sample_prompts)}). Adjusting prompts for test.")
-        # Simple adjustment: repeat prompts or truncate. For this test, let's tile prompts.
-        num_gens_per_prompt_test = len(sample_completions) // len(sample_prompts) if len(sample_prompts) > 0 and len(sample_completions) % len(sample_prompts) == 0 else 1
-        if len(sample_prompts) > 0 :
-            sample_prompts_expanded = [p for p in sample_prompts for _ in range(num_gens_per_prompt_test)]
-            sample_prompts_expanded = sample_prompts_expanded[:len(sample_completions)]
-        else:
-            sample_prompts_expanded = [""] * len(sample_completions)
-
-    else:
-        sample_prompts_expanded = sample_prompts
-
-
-    default_config = get_reward_config()
-    print("Default Reward Config:", default_config)
-
-    print("\n--- Testing individual reward functions ---")
-    print("Reward Length:", reward_length(sample_completions, default_config["target_length"], default_config["length_penalty_per_char"], default_config.get("length_positive_exact", 0.5), default_config.get("length_positive_close", 0.2)))
-    print("Reward Arabic Only:", reward_arabic_only(sample_completions, default_config["arabic_penalty_factor"]))
-    print("Reward Contains Keywords:", reward_contains_keywords(sample_completions, default_config["keywords_to_reward"], default_config["reward_keywords_value"]))
-    print("Reward Not Contains Forbidden:", reward_not_contains_forbidden_keywords(sample_completions, default_config["keywords_to_penalize"], default_config["forbidden_penalty_value"]))
-    print("Reward Question Words Not In Answer:", reward_question_words_not_in_answer(sample_completions, sample_prompts_expanded, default_config["arabic_question_words"], default_config["q_words_penalty_value"]))
-    print("Reward Think/Answer Tags:", reward_think_answer_tags(sample_completions, think_tag_pair=("<think>", "</think>"), answer_tag_pair=("<answer>", "</answer>"), reward_value=default_config["think_answer_reward_value"], penalty_value=default_config["think_answer_penalty_value"]))
-
-    print("\n--- Testing combined_reward_pipeline ---")
-    combined_scores = combined_reward_pipeline(sample_completions, sample_prompts_expanded, default_config)
-    print("Combined Rewards:", combined_scores)
-    for i, comp in enumerate(sample_completions):
-        print(f"Prompt: {sample_prompts_expanded[i][:50]}... | Completion: {comp[:50]}... | Score: {combined_scores[i]:.2f}")
-
-    # Mock tokenizer and batch for grpo_reward_function_unsloth
-    class MockTokenizer:
-        def batch_decode(self, token_ids, skip_special_tokens=True):
-            # This is a very simplified mock. In reality, it would convert IDs to strings.
-            return [f"decoded_prompt_{i}" for i in range(len(token_ids))] 
-
-    mock_tokenizer = MockTokenizer()
-    mock_batch_v1 = {
-        # Assuming GRPOTrainer provides 'prompt_input_ids' after its processing
-        "prompt_input_ids": [[101, 7592, 2026, 2003, 102], [101, 2054, 2003, 102]] # Mock token IDs
-    }
-    # If completions has 4 items, and prompt_input_ids has 2, it implies 2 generations per prompt
-    sample_completions_for_grpo_test = sample_completions[:4]
-    mock_batch_for_grpo_test = { "prompt_input_ids": [[1],[2]] } # 2 prompts
-    
-    # Adjust prompts_text for the grpo_reward_function_unsloth test case
-    # It expects the raw batch and decodes prompts itself.
-    # The number of completions should be num_prompts * num_generations.
-    # Let's say num_generations is 2 for this test, so 2 completions per prompt in mock_batch.
-    
-    # Test case 1: prompt_input_ids exists
-    print("\n--- Testing grpo_reward_function_unsloth (with prompt_input_ids) ---")
-    try:
-        grpo_rewards = grpo_reward_function_unsloth(
-            completions=sample_completions_for_grpo_test, # 4 completions
-            tokenizer=mock_tokenizer,
-            reward_config=default_config,
-            batch=mock_batch_for_grpo_test # 2 prompts => 2 gens per prompt
-        )
-        print("GRPO Rewards (prompt_input_ids):", grpo_rewards)
-    except Exception as e:
-        print(f"Error in GRPO reward function test (prompt_input_ids): {e}")
-
-    # Test case 2: input_ids exists (e.g. tldr dataset style)
-    print("\n--- Testing grpo_reward_function_unsloth (with input_ids) ---")
-    mock_batch_v2 = { "input_ids": [[3],[4]] }
-    try:
-        grpo_rewards_v2 = grpo_reward_function_unsloth(
-            completions=sample_completions_for_grpo_test, # 4 completions
-            tokenizer=mock_tokenizer,
-            reward_config=default_config,
-            batch=mock_batch_v2 # 2 prompts => 2 gens per prompt
-        )
-        print("GRPO Rewards (input_ids):", grpo_rewards_v2)
-    except Exception as e:
-        print(f"Error in GRPO reward function test (input_ids): {e}")
-
-    # Test case 3: query_input_ids (Unsloth SFTTrainer style for GRPO)
-    print("\n--- Testing grpo_reward_function_unsloth (with query_input_ids) ---")
-    mock_batch_v3 = { "query_input_ids": [[5],[6]] }
-    try:
-        grpo_rewards_v3 = grpo_reward_function_unsloth(
-            completions=sample_completions_for_grpo_test, # 4 completions
-            tokenizer=mock_tokenizer,
-            reward_config=default_config,
-            batch=mock_batch_v3 # 2 prompts => 2 gens per prompt
-        )
-        print("GRPO Rewards (query_input_ids):", grpo_rewards_v3)
-    except Exception as e:
-        print(f"Error in GRPO reward function test (query_input_ids): {e}")
-
-    print("\nConsiderations for reward function design:")
-    print("1. Balance: Ensure positive rewards are achievable and penalties are not overly harsh or frequent.")
-    print("2. Scaling/Normalization: If reward components have vastly different scales, normalize them before weighting.")
-    print("3. Target Behavior: Rewards should clearly guide the model towards desired Arabic reasoning and conversational properties.")
-    print("4. Iteration: Expect to iterate on weights and logic based on training behavior (e.g., if mean rewards are consistently negative).") 
-
-    # The following tests were previously inside a nested if __name__ == "__main__"
-    # Test individual reward functions (additional specific cases)
-    print("\n--- Further testing individual reward functions ---") 
-    sample_completions_good = ["<think>أفكر باللغة العربية</think><answer>هذه إجابة عربية.</answer>"]
-    sample_completions_bad_lang = ["<think>Thinking in English</think><answer>English answer.</answer>"]
-    sample_completions_no_tags = ["مجرد نص عربي بدون علامات."]
-    sample_completions_short = ["<think>قصير</think><answer>جدا</answer>"]
-    sample_completions_empty = [""]
-
-    print(f"Arabic only (good case): {reward_arabic_only(sample_completions_good)}")
-    print(f"Arabic only (bad lang case): {reward_arabic_only(sample_completions_bad_lang)}")
-    print(f"Think/Answer tags (good case): {reward_think_answer_tags(sample_completions_good)}")
-    print(f"Think/Answer tags (no tags case): {reward_think_answer_tags(sample_completions_no_tags)}")
-    # Corrected reward_length calls:
-    print(f"Length (good case, target={default_config['target_length']}): {reward_length(sample_completions_good, target_length=default_config['target_length'])}")
-    print(f"Length (short case, target=10): {reward_length(sample_completions_short, target_length=10)}") # Using target_length=10 for "short"
-    
-    # Test combined GRPO reward function (this section seemed like a duplicate or alternative test setup,
-    # it uses 'batch_elements' which is not standard for GRPOTrainer's reward_function,
-    # and it defines 'rewards_tensor, detailed_rewards_log' which is not how the main grpo_reward_function_unsloth is defined to return.
-    # For now, I will comment out this potentially problematic/confusing test block.
-    # If it's essential, it needs to be reconciled with the main grpo_reward_function_unsloth's signature and expected use.
-    # print("\n--- Testing combined GRPO reward function (alternative setup - REVIEW IF NEEDED) ---")
-    # tokenizer_for_alt_test = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct") 
-    # config_for_alt_test = get_reward_config() 
-    # simulated_batch_elements = {}
-    # all_completions_for_alt_test = sample_completions_good + sample_completions_bad_lang + sample_completions_no_tags
-    # try:
-    #     rewards_tensor_alt, detailed_rewards_log_alt = grpo_reward_function_unsloth(
-    #         completions=all_completions_for_alt_test,
-    #         tokenizer=tokenizer_for_alt_test, 
-    #         reward_config=config_for_alt_test,
-    #         batch_elements=simulated_batch_elements 
-    #     )
-    #     print(f"Combined rewards (tensor - alt): {rewards_tensor_alt}")
-    #     print(f"Detailed rewards log (alt): {detailed_rewards_log_alt}")
-    #     assert isinstance(rewards_tensor_alt, torch.Tensor), "Rewards must be a torch.Tensor"
-    #     assert rewards_tensor_alt.ndim == 1 and rewards_tensor_alt.size(0) == len(all_completions_for_alt_test), "Rewards tensor shape incorrect"
-    # except Exception as e_alt:
-    #     print(f"Error in alternative GRPO reward test: {e_alt}")
-
-    # The following tests for sample_completions_tags and "specific cases from log" were correctly placed
-    # at the end of the script execution flow if run directly.
-    # Test for think_answer_tags (using different samples)
-    print("\n--- Testing Think/Answer Tags with more samples ---")
-    sample_completions_tags = [
-        "<think>التفكير هنا.</think><answer>الإجابة هنا.</answer>", # Good
-        "<think>التفكير هنا.</think> <answer>الإجابة هنا.</answer>", # Good with space
-        "لا يوجد تفكير<answer>الإجابة هنا.</answer>", # Missing think
-        "<think>التفكير هنا.</think>الإجابة بدون علامة.", # Missing answer tag
-        "<answer>الإجابة أولاً.</answer><think>التفكير ثانياً.</think>", # Wrong order
-        "<think>مفتوح فقط", # Malformed think
-        "<answer>مفتوح فقط</answer>", # Malformed answer (closed but not opened before)
-        "كلام عادي بدون أي علامات.", # No tags
-        "<think>مغلق بشكل خاطئ</thinkwrong><answer>صحيح</answer>", 
-        "<think>صحيح</think><answer>خطأ</answerwrong>"
+    sample_solutions = [
+        "<think>جمع 1 و 1.</think><answer>إذن، الناتج هو ٢.</answer>", # Corresponds to "one plus one"
+        "<think>السماء زرقاء بسبب تشتت رايلي للضوء.</think><answer>إذن، اللون الأزرق بسبب التشتت.</answer>", # Corresponds to "Why is the sky blue?"
+        "<think>تأخر القطار بسبب الأمطار الغزيرة.</think><answer>إذن، يجب أن ننتظر.</answer>", # Corresponds to "لماذا تأخر القطار؟"
+        "<think>عاصمة فرنسا هي باريس.</think><answer>إذن، عاصمة فرنسا هي باريس.</answer>", # Corresponds to "What is the capital of France?"
+        "<think>هذا للتحقق من الإجابة الفارغة.</think><answer>هذه إجابة فارغة.</answer>", # Corresponds to "empty completion"
+        "<think>سبب تأخر القطار هو ظروف جوية سيئة.</think><answer>إذن، تأخر القطار.</answer>", # Corresponds to "اشرح سبب تأخر القطار."
+        "<think>المساعدة ممكنة في هذا السياق.</think><answer>بالتأكيد يمكنني المساعدة.</answer>", # Corresponds to "هل يمكنك مساعدتي؟"
+        "<think>هذا هو مثال لجملة طويلة.</think><answer>هذه جملة طويلة.</answer>", # Corresponds to "اكتب جملة طويلة."
+        "<think>الإجابة هي كلمة واحدة فقط.</think><answer>كلمة.</answer>" # Corresponds to "اكتب كلمة واحدة."
     ]
-    print(f"Reward Think/Answer Tags (various cases): {reward_think_answer_tags(sample_completions_tags, reward_value=default_config.get('think_answer_reward_value', 1.0), penalty_value=default_config.get('think_answer_penalty_value', -1.0))}")
 
-    # Test cases for individual functions (as per user's log, they were failing here - now checking if fixed)
-    # This is a repeat of tests from earlier in the __main__ block, but using simple lists.
-    print("\n--- Testing individual reward functions (specific simple cases from log) ---")
-    print(f"Arabic only (good, single list): {reward_arabic_only(['مرحبا بالعالم'])}") 
-    print(f"Arabic only (bad lang, single list): {reward_arabic_only(['Hello world'])}")
-
+    sample_completions = [
+        "الإجابة هي اثنان لأن واحد زائد واحد يساوي اثنان.", # Good - No tags, but has reasoning words and answer.
+        "I don't know the answer.", # Bad - English, forbidden keyword, no tags, not arabic numbers.
+        "الجواب هو ثلاثة. لماذا تسأل؟", # Okay - repeats question word, no tags, no structured reasoning.
+        "ما هو الجواب؟", # Bad - just a question, no tags, no reasoning.
+        "", # Bad - empty.
+        "بسبب الأمطار الغزيرة، تأخر القطار. وبالتالي، يجب أن ننتظر.", # Good reasoning example - No tags, but has strong reasoning words.
+        "أنا آسف، لا يمكنني المساعدة في هذا.", # Bad - forbidden keyword.
+        "هذه جملة عربية طويلة جدا جدا جدا تمتد لأكثر من خمسين حرفا لكي نختبر طول النص وكيف يتم تقييمه.", # Length test.
+        "قطة." # Short, Arabic.
+    ]
     
+    print(f"\n--- Running combined_reward_pipeline on samples (showing detailed breakdown) ---")
+    combined_scores = combined_reward_pipeline(sample_completions, sample_prompts, sample_solutions, reward_cfg)
+    print("\n--- Final Combined Rewards ---")
+    for i, score in enumerate(combined_scores):
+        print(f"Sample {i+1}: Total Reward = {score:.4f}")
+
+    # --- Testing grpo_reward_function_unsloth (simulating GRPOTrainer call) ---
+    print("\n--- Testing grpo_reward_function_unsloth (simulating GRPOTrainer call) ---")
+    
+    # Simulate a batch with 2 prompts, and 2 completions per prompt (total 4 completions)
+    simulated_prompts_input_ids = [
+        [1, 2, 3, 4, 5], # Mock token IDs for prompt 1
+        [6, 7, 8, 9, 10] # Mock token IDs for prompt 2
+    ]
+    simulated_prompts_text_decoded = [
+        "Prompt 1: ما هو الناتج؟",
+        "Prompt 2: اشرح السبب؟"
+    ]
+    simulated_solutions_from_dataset = [
+        "<think>حل ١.</think><answer>الناتج هو ١٠.</answer>",
+        "<think>سبب ٢.</think><answer>السبب هو كذا.</answer>"
+    ]
+
+    # Assume 2 generations per prompt
+    simulated_completions_for_grpo = [
+        "<think>الحل هو كذا. الخطوة الأولى.</think><answer>الناتج هو ١٠.</answer>", # Gen for Prompt 1 (correct)
+        "<think>الحل هو كذا. ولكن بالإنجليزية. Step 1.</think><answer>The answer is 10.</answer>", # Gen for Prompt 1 (lang mix)
+        "<answer>السبب كذا.</answer>", # Gen for Prompt 2 (missing think)
+        "هذا تكرار، تكرار، تكرار. هذا تكرار، تكرار، تكرار. هذا تكرار." # Gen for Prompt 2 (repetition)
+    ]
+
+    # Manually align prompts_text and solutions based on num_generations_per_prompt for the mock call
+    aligned_simulated_prompts = []
+    aligned_simulated_solutions = []
+    num_gens_per_prompt = len(simulated_completions_for_grpo) // len(simulated_prompts_input_ids)
+    
+    for i in range(len(simulated_prompts_input_ids)):
+        aligned_simulated_prompts.extend([simulated_prompts_text_decoded[i]] * num_gens_per_prompt)
+        aligned_simulated_solutions.extend([simulated_solutions_from_dataset[i]] * num_gens_per_prompt)
+
+    mock_kwargs_for_grpo_trainer = {
+        "prompt_input_ids": torch.tensor(simulated_prompts_input_ids), # GRPOTrainer provides token IDs
+        "solutions": simulated_solutions_from_dataset # Assuming 'solutions' column is passed
+    }
+
+    print("\n--- Running grpo_reward_function_unsloth with simulated batch ---")
+    # The `grpo_reward_function_unsloth` takes `completions` (list of strings) directly
+    # and decodes prompts/aligns solutions internally from `kwargs`.
+    grpo_calculated_rewards = grpo_reward_function_unsloth(
+        completions=simulated_completions_for_grpo,
+        tokenizer=mock_tokenizer_for_tests,
+        reward_config=reward_cfg,
+        **mock_kwargs_for_grpo_trainer
+    )
+    print("\nFinal Rewards from grpo_reward_function_unsloth (as torch.Tensor):")
+    print(grpo_calculated_rewards)
