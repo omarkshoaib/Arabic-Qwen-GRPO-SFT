@@ -1,7 +1,6 @@
 import re
 import numpy as np
 import torch
-# from transformers import AutoTokenizer # Not needed if tokenizer is passed to grpo_reward_function_unsloth
 from langdetect import detect # For language consistency reward
 import math # For cosine scaled reward
 
@@ -28,7 +27,7 @@ def accuracy_reward(completions: list[str], solutions: list[str], **kwargs) -> l
         
         # Extract true answer from ground truth solution
         answer_match_true = re.search(r"<answer>(.*?)</answer>", sol, re.DOTALL)
-        true_answer = normalize_arabic_numbers(answer_match_true.group(1).strip()) if answer_match_true else ""
+        true_answer = normalize_arabic_numbers(sol_match.group(1).strip()) if answer_match_true else ""
         
         # Determine reward based on strict string equality
         reward = 1.0 if predicted_answer == true_answer and true_answer != "" else 0.0 # Also penalize empty true_answer
@@ -74,22 +73,6 @@ def format_reward(completions: list[str], **kwargs) -> list[float]:
 
         scores.append(score)
     return scores
-
-def reasoning_steps_reward(completions: list[str], **kwargs) -> list[float]:
-    """
-    Reward function to encourage clear step-by-step reasoning using Arabic indicators.
-    It looks for patterns like "الخطوة ١:", "أولاً", numbered lists, bullet points, and transition words.
-    """
-    # Regex pattern to find indicators of reasoning steps in Arabic
-    pattern = r"(الخطوة\s*\d+:|^\d+\.\s*|^\-\s*|^\*\s*|أولاً|ثانياً|ثالثاً|أخيراً|الاستنتاج|بالتالي|إذن|إذاً|بما\s*أن|حيث\s*أن)"
-    
-    completion_contents = completions # Already strings
-    matches = [len(re.findall(pattern, content, re.MULTILINE | re.IGNORECASE)) # IGNORECASE for robustness
-               for content in completion_contents]
-
-    # Reward is proportional to the number of reasoning steps, maxing out at 1.0
-    # Encourage at least 3 steps for full reward, adjust as needed.
-    return [min(1.0, count / 3.0) for count in matches]
 
 def get_cosine_scaled_reward(
     min_value_wrong: float = -0.5,
@@ -201,14 +184,23 @@ def get_reward_config():
     Returns a default configuration for reward weights and parameters.
     These weights are for the combined reward pipeline.
     """
+    # Calculate weights based on user requirements:
+    # Group 1 (2/3 total): Accuracy, Format, Language Consistency (3 functions)
+    # Each = (2/3) / 3 = 2/9 approx 0.2222...
+    WEIGHT_GROUP1 = 2/9 
+    
+    # Group 2 (1/3 total): Cosine Scaled, Repetition Penalty (2 functions)
+    # Each = (1/3) / 2 = 1/6 approx 0.1666...
+    WEIGHT_GROUP2 = 1/6
+
     return {
         "weights": {
-            "accuracy": 0.4, # High weight for correctness
-            "format": 0.2,   # Important for structured output
-            "reasoning_steps": 0.15, # Encourage showing work
-            "language_consistency": 0.15, # Ensure Arabic output
-            "cosine_scaled": 0.05, # Mildly encourage conciseness / penalize long incorrect
-            "repetition_penalty": 0.05, # Penalize repetition
+            "accuracy": WEIGHT_GROUP1,
+            "format": WEIGHT_GROUP1,
+            "language_consistency": WEIGHT_GROUP1,
+            "cosine_scaled": WEIGHT_GROUP2,
+            "repetition_penalty": WEIGHT_GROUP2,
+            # "reasoning_steps": 0.0, # Removed as per new requirements
         },
         # Parameters for specific reward functions
         "cosine_min_value_wrong": -0.5,
@@ -242,7 +234,6 @@ def combined_reward_pipeline(completions: list[str], prompts_text: list[str], so
     # Calculate individual reward components
     acc_scores = accuracy_reward(completions, solutions)
     fmt_scores = format_reward(completions)
-    rs_scores = reasoning_steps_reward(completions)
     lang_scores = language_consistency_reward(completions) # No prompts needed here
 
     # Cosine scaled reward needs accuracy_rewards and solutions
@@ -266,7 +257,6 @@ def combined_reward_pipeline(completions: list[str], prompts_text: list[str], so
         total_reward = (
             w["accuracy"] * acc_scores[i] +
             w["format"] * fmt_scores[i] +
-            w["reasoning_steps"] * rs_scores[i] +
             w["language_consistency"] * lang_scores[i] +
             w["cosine_scaled"] * cos_scores[i] +
             w["repetition_penalty"] * rep_scores[i]
@@ -282,12 +272,11 @@ def combined_reward_pipeline(completions: list[str], prompts_text: list[str], so
         print(f"Completion: {completions[i][:150]}...")
         print(f"Prompt: {prompts_text[i][:100]}...")
         print(f"Solution: {solutions[i][:100]}...")
-        print(f"  Accuracy Reward: {acc_scores[i]:.4f} (Weight: {w['accuracy']})")
-        print(f"  Format Reward: {fmt_scores[i]:.4f} (Weight: {w['format']})")
-        print(f"  Reasoning Steps Reward: {rs_scores[i]:.4f} (Weight: {w['reasoning_steps']})")
-        print(f"  Language Consistency Reward: {lang_scores[i]:.4f} (Weight: {w['language_consistency']})")
-        print(f"  Cosine Scaled Reward: {cos_scores[i]:.4f} (Weight: {w['cosine_scaled']})")
-        print(f"  Repetition Penalty Reward: {rep_scores[i]:.4f} (Weight: {w['repetition_penalty']})")
+        print(f"  Accuracy Reward: {acc_scores[i]:.4f} (Weight: {w['accuracy']:.4f})")
+        print(f"  Format Reward: {fmt_scores[i]:.4f} (Weight: {w['format']:.4f})")
+        print(f"  Language Consistency Reward: {lang_scores[i]:.4f} (Weight: {w['language_consistency']:.4f})")
+        print(f"  Cosine Scaled Reward: {cos_scores[i]:.4f} (Weight: {w['cosine_scaled']:.4f})")
+        print(f"  Repetition Penalty Reward: {rep_scores[i]:.4f} (Weight: {w['repetition_penalty']:.4f})")
         print(f"  Total Reward: {final_rewards[i]:.4f}")
 
     return final_rewards
@@ -401,17 +390,23 @@ if __name__ == '__main__':
     ]
 
     sample_completions = [
-        "الإجابة هي اثنان لأن واحد زائد واحد يساوي اثنان.", # Good - No tags, but has reasoning words and answer.
-        "I don't know the answer.", # Bad - English, forbidden keyword, no tags, not arabic numbers.
-        "الجواب هو ثلاثة. لماذا تسأل؟", # Okay - repeats question word, no tags, no structured reasoning.
-        "ما هو الجواب؟", # Bad - just a question, no tags, no reasoning.
-        "", # Bad - empty.
-        "بسبب الأمطار الغزيرة، تأخر القطار. وبالتالي، يجب أن ننتظر.", # Good reasoning example - No tags, but has strong reasoning words.
-        "أنا آسف، لا يمكنني المساعدة في هذا.", # Bad - forbidden keyword.
-        "هذه جملة عربية طويلة جدا جدا جدا تمتد لأكثر من خمسين حرفا لكي نختبر طول النص وكيف يتم تقييمه.", # Length test.
-        "قطة." # Short, Arabic.
+        "<think>لحل 1 + 1، نقوم بجمع العددين: 1 + 1 = 2.</think><answer>إذن، الناتج هو ٢.</answer>", # Good: Format, Arabic, Accurate (for 1+1=2)
+        "I don't know the answer.", # Bad: English, forbidden keyword, no tags.
+        "الجواب هو ثلاثة. لماذا تسأل؟", # Okay: Repeats question word, no tags, not accurate.
+        "<think>هذا سؤال بسيط.</think><answer>الجواب هو ما هو الجواب؟</answer>", # Bad: repeats question, bad format.
+        "", # Bad: Empty.
+        "<think>تأخر القطار بسبب الأمطار الغزيرة. وبالتالي، يجب أن ننتظر.</think><answer>إذن، تأخر القطار.</answer>", # Good: Reasoning, Arabic, Format
+        "أنا آسف، لا يمكنني المساعدة في هذا.", # Bad: Forbidden keyword, no tags, no reasoning.
+        "<think>هذه جملة عربية طويلة جدا جدا جدا تمتد لأكثر من خمسين حرفا لكي نختبر طول النص وكيف يتم تقييمه.</think><answer>النص طويل.</answer>", # Length test
+        "<think>قطة.</think><answer>قطة.</answer>" # Short, Arabic, Repetition.
     ]
     
+    # Ensure all sample lists have the exact same length
+    min_len = min(len(sample_completions), len(sample_prompts), len(sample_solutions))
+    sample_completions = sample_completions[:min_len]
+    sample_prompts = sample_prompts[:min_len]
+    sample_solutions = sample_solutions[:min_len]
+
     print(f"\n--- Running combined_reward_pipeline on samples (showing detailed breakdown) ---")
     combined_scores = combined_reward_pipeline(sample_completions, sample_prompts, sample_solutions, reward_cfg)
     print("\n--- Final Combined Rewards ---")
