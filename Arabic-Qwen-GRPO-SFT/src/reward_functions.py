@@ -27,7 +27,8 @@ def accuracy_reward(completions: list[str], solutions: list[str], **kwargs) -> l
         
         # Extract true answer from ground truth solution
         answer_match_true = re.search(r"<answer>(.*?)</answer>", sol, re.DOTALL)
-        true_answer = normalize_arabic_numbers(sol_match.group(1).strip()) if answer_match_true else ""
+        # FIX: Changed 'sol_match' to 'answer_match_true'
+        true_answer = normalize_arabic_numbers(answer_match_true.group(1).strip()) if answer_match_true else ""
         
         # Determine reward based on strict string equality
         reward = 1.0 if predicted_answer == true_answer and true_answer != "" else 0.0 # Also penalize empty true_answer
