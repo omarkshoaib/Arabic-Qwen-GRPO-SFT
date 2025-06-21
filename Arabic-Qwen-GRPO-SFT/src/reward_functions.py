@@ -1,11 +1,26 @@
 import re
 import numpy as np
 import torch
-from langdetect import detect # For language consistency reward
 import math # For cosine scaled reward
 
+# Optional import for language detection
+try:
+    from langdetect import detect # For language consistency reward
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    print("Warning: langdetect not available. Language consistency reward will be simplified.")
+    LANGDETECT_AVAILABLE = False
+    def detect(text):
+        # Simple fallback: check if text contains Arabic characters
+        arabic_chars = sum(1 for char in text if '\u0600' <= char <= '\u06FF')
+        return 'ar' if arabic_chars > len(text) * 0.3 else 'en'
+
 # Project-specific import for number normalization
-from src.data_loader import normalize_arabic_numbers # Used by accuracy_reward
+try:
+    from src.data_loader import normalize_arabic_numbers # Used by accuracy_reward
+except ImportError:
+    # Fallback for when running as script from within src directory
+    from data_loader import normalize_arabic_numbers
 
 # ==============================================================================
 # DeepSeek R1-Zero Inspired Reward Functions (adapted for Arabic)

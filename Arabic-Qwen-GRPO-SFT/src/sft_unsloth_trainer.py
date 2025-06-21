@@ -28,10 +28,17 @@ from peft import LoraConfig, get_peft_model
 from src.data_loader import load_and_prepare_dataset  # Use our SFT-compatible data loader
 
 # Configuration
+# TRAINING PIPELINE PATH FLOW:
+# 1. SFT starts with: "Qwen/Qwen2.5-0.5B" (base model) ← THIS FILE
+# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint ← THIS FILE
+# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint (SFT output)
+# 4. GRPO saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth
+
 MODEL_NAME = "Qwen/Qwen2.5-0.5B"  # Use standard model, not Unsloth's 4-bit version
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_standard")
+SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_standard") # MUST match grpo_unsloth_trainer.py
+OUTPUT_DIR = SFT_OUTPUT_DIR # Use the consistent SFT output directory
 MAX_SEQ_LENGTH = 1024  # Max sequence length for model
 
 # SFT Training Hyperparameters
@@ -194,9 +201,19 @@ def main():
     # 5. Save the model
     # ==================================================
     final_save_path = os.path.join(OUTPUT_DIR, "final_checkpoint")
+    print(f"Saving SFT model to: {final_save_path}")
+    
+    # Ensure the directory exists
+    os.makedirs(final_save_path, exist_ok=True)
+    
+    # Save LoRA adapters and tokenizer
     trainer.model.save_pretrained(final_save_path)  # Saves LoRA adapters
     tokenizer.save_pretrained(final_save_path)
-    print(f"SFT Model adapters and tokenizer saved to {final_save_path}")
+    
+    print(f"✅ SFT Model adapters and tokenizer saved to {final_save_path}")
+    print(f"📁 Saved files: {os.listdir(final_save_path)}")
+    print(f"🔗 This checkpoint will be loaded by GRPO trainer as: {final_save_path}")
+    print(f"⚠️  IMPORTANT: Run GRPO training next to continue on this fine-tuned model!")
 
 if __name__ == "__main__":
     main()

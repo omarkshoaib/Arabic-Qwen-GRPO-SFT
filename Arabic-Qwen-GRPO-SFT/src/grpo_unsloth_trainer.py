@@ -13,10 +13,24 @@ from src.data_loader import load_and_prepare_dataset, SYSTEM_PROMPT_ARABIC_REASO
 from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
-MODEL_NAME = "unsloth/Qwen2.5-0.5B-bnb-4bit"  # Updated Model Name
-DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
+# TRAINING PIPELINE PATH FLOW:
+# 1. SFT starts with: "Qwen/Qwen2.5-0.5B" (base model)
+# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint
+# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint (SFT output)
+# 4. GRPO saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth
+
+# Base model for SFT training (cold start)
+SFT_BASE_MODEL_NAME = "Qwen/Qwen2.5-0.5B" # This is the base model for SFT
+
+# Output directory for SFT training (MUST match sft_unsloth_trainer.py)
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2.5_0.5b_bnb_4bit_unsloth") # Updated Output Dir to reflect bnb-4bit
+SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_standard")
+SFT_FINAL_CHECKPOINT_PATH = os.path.join(SFT_OUTPUT_DIR, "final_checkpoint")
+
+# GRPO will train on the SFT-tuned model
+MODEL_NAME = SFT_FINAL_CHECKPOINT_PATH # GRPO will load the SFT-trained model
+DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
+OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth") # New output dir for GRPO on SFT model
 MAX_SEQ_LENGTH = 1024
 
 # LoRA configuration
@@ -48,10 +62,25 @@ def main():
     print(f"Ensuring current working directory for training: {current_dir}")
     print(f"Executing GRPO trainer from: {current_dir}")
 
+    # Validate that SFT checkpoint exists before proceeding
+    print(f"\nValidating SFT checkpoint path: {MODEL_NAME}")
+    if not os.path.exists(MODEL_NAME):
+        print(f"❌ ERROR: SFT checkpoint not found at {MODEL_NAME}")
+        print(f"Please ensure SFT training completed successfully.")
+        print(f"Expected files in {MODEL_NAME}:")
+        print(f"  - adapter_config.json")
+        print(f"  - adapter_model.safetensors (or .bin)")
+        print(f"  - tokenizer files")
+        return
+    else:
+        print(f"✅ SFT checkpoint found at {MODEL_NAME}")
+        checkpoint_files = os.listdir(MODEL_NAME)
+        print(f"Checkpoint contains: {checkpoint_files}")
 
     # Load model and tokenizer
-    # For "unsloth/Qwen2.5-0.5B-bnb-4bit", load_in_4bit is implied by the model name.
-    # Unsloth handles the dtype and 4-bit loading automatically for such models.
+    # The SFT checkpoint contains LoRA adapters saved with PEFT
+    # Unsloth can load these if we specify the correct path
+    print(f"\nLoading SFT-tuned model from: {MODEL_NAME}")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
@@ -59,7 +88,7 @@ def main():
         # load_in_4bit=True, # Unsloth handles this
         # token=os.environ.get("HF_TOKEN"), # if using gated models
     )
-    print("Unsloth model with LoRA adapters loaded.")
+    print("✅ Unsloth successfully loaded SFT-tuned model with LoRA adapters.")
 
     # Apply chat template
     # Using "chatml" as it's a common base for Qwen models and a Unsloth default
@@ -187,4 +216,4 @@ def main():
     print("Model saved.")
 
 if __name__ == "__main__":
-    main() 
+    main()
