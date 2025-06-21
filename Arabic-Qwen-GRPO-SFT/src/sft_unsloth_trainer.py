@@ -15,29 +15,24 @@ print(f"DEBUG: Calculated project_root = {project_root}")
 print(f"DEBUG: Current sys.path = {sys.path}")
 
 import torch
-from datasets import load_dataset
-from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForSeq2Seq
-)
-from peft import LoraConfig, get_peft_model
+from unsloth import FastLanguageModel
+from unsloth.chat_templates import get_chat_template
+from trl import SFTTrainer
+from transformers import TrainingArguments
 
 from src.data_loader import load_and_prepare_dataset  # Use our SFT-compatible data loader
 
 # Configuration
 # TRAINING PIPELINE PATH FLOW:
-# 1. SFT starts with: "Qwen/Qwen2.5-0.5B" (base model) ← THIS FILE
-# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint ← THIS FILE
-# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint (SFT output)
+# 1. SFT starts with: "unsloth/Qwen2.5-0.5B-Instruct" (instruction-tuned base model) ← THIS FILE
+# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_instruct_unsloth/final_checkpoint ← THIS FILE
+# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_instruct_unsloth/final_checkpoint (SFT output)
 # 4. GRPO saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth
 
-MODEL_NAME = "Qwen/Qwen2.5-0.5B"  # Use standard model, not Unsloth's 4-bit version
+MODEL_NAME = "unsloth/Qwen2.5-0.5B-Instruct"  # Use Unsloth's instruction-tuned model
 DATASET_NAME = "Omartificial-Intelligence-Space/Arabic_Reasoning_Dataset"
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_standard") # MUST match grpo_unsloth_trainer.py
+SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_instruct_unsloth") # Updated to reflect new model
 OUTPUT_DIR = SFT_OUTPUT_DIR # Use the consistent SFT output directory
 MAX_SEQ_LENGTH = 1024  # Max sequence length for model
 
@@ -47,7 +42,7 @@ SFT_BATCH_SIZE = 2  # Keep low for Colab
 SFT_GRAD_ACCUMULATION_STEPS = 4
 SFT_LEARNING_RATE = 2e-4  # Common for SFT
 SFT_LOGGING_STEPS = 10
-SFT_OPTIMIZER = "adamw_torch"  # Standard AdamW instead of 8bit
+SFT_OPTIMIZER = "adamw_8bit"  # Use 8bit optimizer with Unsloth
 SFT_LR_SCHEDULER_TYPE = "cosine"
 SFT_WARMUP_RATIO = 0.1
 SFT_MAX_GRAD_NORM = 0.3
@@ -60,7 +55,7 @@ TARGET_MODULES_LORA = [
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 ]
-LORA_DROPOUT = 0.05
+LORA_DROPOUT = 0.0  # Set to 0 for Unsloth
 
 # Helper to check if running in Colab
 IS_COLAB = "google.colab" in sys.modules
@@ -69,35 +64,42 @@ IS_COLAB = "google.colab" in sys.modules
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def main():
-    # 1. Load Model and Tokenizer (standard way, not using Unsloth)
+    print("--- Starting SFT Training with Unsloth ---")
+    
+    # 1. Load Model and Tokenizer with Unsloth
     # ==================================================
-    print(f"DEBUG: Loading model {MODEL_NAME} with standard transformers library")
+    print(f"Loading model {MODEL_NAME} with Unsloth FastLanguageModel")
     
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    # Load model with standard approach
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16,  # Use float16 for T4 GPU
-        device_map="auto"
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=MODEL_NAME,
+        max_seq_length=MAX_SEQ_LENGTH,
+        dtype=None,  # Let Unsloth decide the best dtype
+        load_in_4bit=True,  # Enable 4-bit quantization for memory efficiency
     )
-    print(f"Loaded model {MODEL_NAME}")
+    print(f"✅ Loaded model {MODEL_NAME} with Unsloth")
     
-    # Add LoRA adapters
-    lora_config = LoraConfig(
+    # Apply chat template
+    tokenizer = get_chat_template(
+        tokenizer,
+        chat_template="chatml",  # Use chatml template for consistency with GRPO
+        mapping={"role": "role", "content": "content", "user": "user", "assistant": "assistant"},
+        map_eos_token=True,
+    )
+    print("✅ Applied chatml chat template to tokenizer")
+    
+    # Enable LoRA for fine-tuning
+    model = FastLanguageModel.get_peft_model(
+        model,
         r=R_LORA,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
+        target_modules=TARGET_MODULES_LORA,
         bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=TARGET_MODULES_LORA
+        use_gradient_checkpointing="unsloth",  # Use unsloth's gradient checkpointing
+        random_state=3407,
+        max_seq_length=MAX_SEQ_LENGTH,
     )
-    
-    model = get_peft_model(model, lora_config)
-    print("Model with LoRA adapters prepared for SFT")
+    print("✅ Model with LoRA adapters prepared for SFT")
 
     # 2. Load and Prepare Dataset
     # ==================================================
@@ -108,46 +110,16 @@ def main():
         tokenizer=tokenizer, 
         max_seq_length=MAX_SEQ_LENGTH
     )
-    print(f"Loaded SFT dataset with {len(train_dataset)} examples")
+    print(f"✅ Loaded SFT dataset with {len(train_dataset)} examples")
     
-    # Define a function to format messages to a single string and then tokenize
-    def format_and_tokenize_dataset(examples):
-        # examples['messages'] is a list of message lists (one for each example in the batch)
-        formatted_texts = []
-        for single_example_messages in examples['messages']:
-            formatted_str = tokenizer.apply_chat_template(
-                single_example_messages,
-                tokenize=False,  # Get the string representation
-                add_generation_prompt=False  # Appropriate for SFT
-            )
-            formatted_texts.append(formatted_str)
-        
-        # Tokenize the batch of formatted texts
-        tokenized_outputs = tokenizer(
-            formatted_texts,
-            truncation=True,
-            padding=False,
-            max_length=MAX_SEQ_LENGTH,
-        )
-        
-        # Create labels for causal language modeling (same as input_ids)
-        tokenized_outputs["labels"] = tokenized_outputs["input_ids"].copy()
-        
-        return tokenized_outputs
+    # Check the first example to ensure proper formatting
+    if len(train_dataset) > 0:
+        print("Sample formatted data:")
+        print(f"  First example keys: {list(train_dataset[0].keys())}")
+        if 'messages' in train_dataset[0]:
+            print(f"  First example messages: {train_dataset[0]['messages']}")
 
-    # Apply the formatting and tokenization
-    original_columns = train_dataset.column_names
-    train_dataset = train_dataset.map(
-        format_and_tokenize_dataset, 
-        batched=True, 
-        remove_columns=[col for col in original_columns if col not in ['input_ids', 'attention_mask']]
-    )
-    print(f"Formatted and tokenized SFT dataset. Columns: {train_dataset.column_names}")
-    
-    if 'input_ids' in train_dataset.column_names and len(train_dataset) > 0:
-        print(f"First SFT training example input_ids length: {len(train_dataset[0]['input_ids'])}")
-    
-    # 3. Set up TrainingArguments and Trainer
+    # 3. Set up TrainingArguments and SFTTrainer
     # ==================================================
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
@@ -161,42 +133,35 @@ def main():
         warmup_ratio=SFT_WARMUP_RATIO,
         max_grad_norm=SFT_MAX_GRAD_NORM,
         seed=42,
-        fp16=True,  # Enable fp16 for T4 GPU
-        bf16=False,  # Disable bf16 as T4 doesn't support it
+        fp16=not torch.cuda.is_bf16_supported(),  # Use fp16 if bf16 not available
+        bf16=torch.cuda.is_bf16_supported(),      # Use bf16 if available
         logging_strategy="steps",
         eval_strategy="no",  # No evaluation during SFT for now
         save_strategy="steps",
         save_steps=SFT_SAVE_STEPS,
         save_total_limit=2,
-        group_by_length=False,  # Faster when False
-        report_to="none"  # Disable wandb/other reporting for now
+        group_by_length=True,   # Enable for efficiency with Unsloth
+        report_to="none",       # Disable wandb/other reporting for now
+        remove_unused_columns=False,  # Important for SFTTrainer
     )
 
-    # Use standard Trainer instead of SFTTrainer to avoid Triton kernels
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        model=model,
-        padding=True,
-        label_pad_token_id=-100
-    )
-    
-    # Set task to causal language modeling
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.use_cache = False  # Disable KV cache during training for efficiency
-    
-    trainer = Trainer(
+    # Use SFTTrainer from TRL with Unsloth model
+    trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        data_collator=data_collator,
+        tokenizer=tokenizer,
+        dataset_text_field="messages",  # The field containing the conversation
+        max_seq_length=MAX_SEQ_LENGTH,
+        packing=False,  # Set to False for better compatibility
     )
-    print("Trainer initialized.")
+    print("✅ SFTTrainer initialized")
 
     # 4. Train the model
     # ==================================================
     print("Starting SFT training...")
     trainer.train()
-    print("SFT training finished.")
+    print("✅ SFT training finished")
 
     # 5. Save the model
     # ==================================================

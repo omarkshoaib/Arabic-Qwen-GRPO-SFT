@@ -7,13 +7,13 @@ from transformers import TextStreamer
 from src.data_loader import SYSTEM_PROMPT_ARABIC_REASONING # Or define it here if preferred
 
 # Configuration
-DEFAULT_MODEL_PATH = "Qwen/Qwen2-0.5B-Instruct" # Base model for testing before training
+DEFAULT_MODEL_PATH = "unsloth/Qwen2.5-0.5B-Instruct" # Instruction-tuned base model for baseline comparison
 
 # === How to set MODEL_TO_LOAD to point to a trained checkpoint on Drive ===
 # 1. Identify the path to your saved adapters on Google Drive. Examples:
 #    DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-#    SFT_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2_0.5b_arabic_unsloth", "final_checkpoint")
-#    GRPO_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "grpo_qwen2_0.5b_arabic_unsloth", "final_checkpoint")
+#    SFT_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_instruct_unsloth", "final_checkpoint")
+#    GRPO_CHECKPOINT_ON_DRIVE = os.path.join(DRIVE_OUTPUT_BASE, "grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth", "final_checkpoint")
 # 2. Then set MODEL_TO_LOAD directly to this path string:
 #    MODEL_TO_LOAD = SFT_CHECKPOINT_ON_DRIVE 
 #    or
@@ -21,7 +21,7 @@ DEFAULT_MODEL_PATH = "Qwen/Qwen2-0.5B-Instruct" # Base model for testing before 
 
 # Set this to your trained SFT model checkpoint path
 DRIVE_OUTPUT_BASE_INFERENCE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-TRAINED_CKPT_PATH = os.path.join(DRIVE_OUTPUT_BASE_INFERENCE, "sft_qwen2.5_0.5b_standard", "final_checkpoint")
+TRAINED_CKPT_PATH = os.path.join(DRIVE_OUTPUT_BASE_INFERENCE, "sft_qwen2.5_0.5b_instruct_unsloth", "final_checkpoint")
 MODEL_TO_LOAD = TRAINED_CKPT_PATH
 
 MAX_SEQ_LENGTH = 2048

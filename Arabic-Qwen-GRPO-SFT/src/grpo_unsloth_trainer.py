@@ -14,17 +14,17 @@ from src.reward_functions import get_reward_config, grpo_reward_function_unsloth
 
 # Configuration
 # TRAINING PIPELINE PATH FLOW:
-# 1. SFT starts with: "Qwen/Qwen2.5-0.5B" (base model)
-# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint
-# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_standard/final_checkpoint (SFT output)
+# 1. SFT starts with: "unsloth/Qwen2.5-0.5B-Instruct" (instruction-tuned base model)
+# 2. SFT saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_instruct_unsloth/final_checkpoint
+# 3. GRPO loads from: /content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_instruct_unsloth/final_checkpoint (SFT output)
 # 4. GRPO saves to: /content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth
 
-# Base model for SFT training (cold start)
-SFT_BASE_MODEL_NAME = "Qwen/Qwen2.5-0.5B" # This is the base model for SFT
+# Base model for SFT training (instruction-tuned)
+SFT_BASE_MODEL_NAME = "unsloth/Qwen2.5-0.5B-Instruct" # This is the instruction-tuned base model for SFT
 
 # Output directory for SFT training (MUST match sft_unsloth_trainer.py)
 DRIVE_OUTPUT_BASE = "/content/drive/MyDrive/Arabic-Qwen-Outputs"
-SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_standard")
+SFT_OUTPUT_DIR = os.path.join(DRIVE_OUTPUT_BASE, "sft_qwen2.5_0.5b_instruct_unsloth") # Updated to match new SFT path
 SFT_FINAL_CHECKPOINT_PATH = os.path.join(SFT_OUTPUT_DIR, "final_checkpoint")
 
 # GRPO will train on the SFT-tuned model
