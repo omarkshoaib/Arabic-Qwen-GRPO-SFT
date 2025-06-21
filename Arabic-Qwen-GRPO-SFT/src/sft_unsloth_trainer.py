@@ -119,6 +119,37 @@ def main():
         if 'messages' in train_dataset[0]:
             print(f"  First example messages: {train_dataset[0]['messages']}")
 
+    # Define formatting function for Unsloth SFTTrainer
+    def formatting_prompts_func(examples):
+        """
+        Format the conversation data for Unsloth SFTTrainer.
+        This function takes a batch of examples and returns formatted text strings.
+        """
+        texts = []
+        for messages in examples["messages"]:
+            # Apply chat template to convert messages to text
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,  # Return string, not tokens
+                add_generation_prompt=False  # Don't add generation prompt for SFT
+            )
+            texts.append(text)
+        return {"text": texts}
+
+    # Apply the formatting function to the dataset
+    train_dataset = train_dataset.map(
+        formatting_prompts_func,
+        batched=True,
+        remove_columns=train_dataset.column_names  # Remove original columns, keep only 'text'
+    )
+    print(f"✅ Formatted dataset for Unsloth SFTTrainer. New columns: {train_dataset.column_names}")
+    
+    # Show a sample of the formatted text
+    if len(train_dataset) > 0:
+        print("Sample formatted text:")
+        print(f"  Text length: {len(train_dataset[0]['text'])}")
+        print(f"  First 200 chars: {train_dataset[0]['text'][:200]}...")
+
     # 3. Set up TrainingArguments and SFTTrainer
     # ==================================================
     training_args = TrainingArguments(
@@ -151,7 +182,8 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         tokenizer=tokenizer,
-        dataset_text_field="messages",  # The field containing the conversation
+        dataset_text_field="text",  # The field containing the formatted conversation text
+        formatting_func=None,  # We already formatted the data, so no need for additional formatting
         max_seq_length=MAX_SEQ_LENGTH,
         packing=False,  # Set to False for better compatibility
     )
