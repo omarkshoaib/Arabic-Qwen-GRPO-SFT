@@ -24,7 +24,7 @@ def format_example_for_grpo(example, tokenizer):
     """
     Formats a single example from the omartificial dataset for GRPO training with Unsloth.
     Outputs a dictionary containing a 'prompt' string (from applying chat template to messages)
-    and the original 'messages' list.
+    and the original 'answer' for reward function evaluation.
     """
     instruction = example.get("instruction", "")
     context = example.get("context", "")
@@ -32,7 +32,7 @@ def format_example_for_grpo(example, tokenizer):
     # Combine context and instruction if context exists
     user_query = instruction
     if context and context.strip():
-        user_query = f"{context}\\n\\n{instruction}" # Context first, then instruction
+        user_query = f"{context}\n\n{instruction}" # Context first, then instruction
     
     user_query = normalize_arabic_numbers(user_query) # Normalize numbers in the query
 
@@ -50,8 +50,7 @@ def format_example_for_grpo(example, tokenizer):
     )
     
     return {
-        "prompt": prompt_string, # This is what the trainer seems to want
-        # "messages": messages,    # Removed to avoid conflict with trl.data_utils.apply_chat_template
+        "prompt": prompt_string, # This is what the trainer wants
         # GRPO datasets also often have 'chosen' and 'rejected' for *preference pairs*
         # but this initial dataset is for prompts. The trainer generates completions.
         # Adding empty placeholders for chosen/rejected in case the trainer expects them,
