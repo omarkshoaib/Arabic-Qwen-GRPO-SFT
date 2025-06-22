@@ -1,0 +1,323 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 📋 **Arabic LLM Evaluation Framework - Step-by-Step Implementation Plan**
+
+## 🎯 **Project Overview**
+Create a comprehensive evaluation system comparing your **Base → SFT → GRPO** progression against **state-of-the-art Arabic LLMs** using established benchmarks with **no data leakage**.
+
+---
+
+## 📊 **Model Registry Configuration**
+
+### **Your Training Progression Models**
+```python
+YOUR_MODELS = {
+    "baseline": "unsloth/Qwen2.5-0.5B-Instruct",
+    "sft": "/content/drive/MyDrive/Arabic-Qwen-Outputs/sft_qwen2.5_0.5b_instruct_unsloth/final_checkpoint", 
+    "grpo": "/content/drive/MyDrive/Arabic-Qwen-Outputs/grpo_on_sft_qwen2.5_0.5b_bnb_4bit_unsloth_final"
+}
+```
+
+### **Comparison Models (<14B Parameters)**
+```python
+COMPARISON_MODELS = {
+    # Qwen 3 Family
+    "qwen3-0.6b": "Qwen/Qwen3-0.6B",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B", 
+    "qwen3-4b": "Qwen/Qwen3-4B",
+    
+    # Qwen 2.5 Family
+    "qwen2.5-0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
+    "qwen2.5-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
+    "qwen2.5-3b": "Qwen/Qwen2.5-3B-Instruct",
+    
+    # SILMA Family
+    "silma-2b": "silma-ai/SILMA-Kashif-2B-Instruct-v1.0",
+    "silma-9b": "silma-ai/SILMA-9B-Instruct-v1.0",
+    
+    # Jais Family
+    "jais-13b": "inceptionai/jais-13b",
+    
+    # ALLaM Family  
+    "allam-7b": "ALLaM-AI/ALLaM-7B-Instruct-preview"
+}
+```
+
+---
+
+## 🏗️ **Phase-by-Phase Implementation Plan**
+
+### **Phase 1: Foundation Setup (Days 1-2)**
+**Goal**: Basic framework with dataset loading and single model evaluation
+
+#### **Phase 1.1: Dataset Integration (Day 1)**
+**Files to create**: `src/evaluation.py` (basic structure)
+
+**Implementation Steps**:
+1. **Setup dataset loaders**:
+   - Arabic MMLU: `MBZUAI/ArabicMMLU` (test split)
+   - ACVA: `FreedomIntelligence/ACVA-Arabic-Cultural-Value-Alignment` (test split)
+   - Arabic Reasoning QA: `MohammedNasser/ARabic_Reasoning_QA` (test split)
+
+2. **Create prompt formatters**:
+   - Multiple choice format for MMLU/ACVA
+   - Arabic system prompt template
+   - Answer extraction functions
+
+3. **Implement evaluation tiers**:
+   - Quick: 10 samples per dataset (2-3 min)
+   - Standard: 50 samples per dataset (10-15 min)  
+   - Full: Complete datasets (45-60 min)
+
+**Test Criteria**: ✅ All datasets load correctly, ✅ Prompt formatting works, ✅ Sample extraction functions work
+
+#### **Phase 1.2: Basic Model Handler (Day 2)**
+**Implementation Steps**:
+1. **Create ModelEvaluator class**:
+   - Unsloth integration for fine-tuned models
+   - Standard transformers for base models
+   - 4-bit quantization for >7B models
+   - Memory cleanup functions
+
+2. **Implement generation interface**:
+   - Unified `generate_answer()` method
+   - Chat template application
+   - Answer extraction from responses
+
+3. **Test with baseline model only**:
+   - Load `unsloth/Qwen2.5-0.5B-Instruct`
+   - Run quick tier evaluation
+   - Verify memory management
+
+**Test Criteria**: ✅ Baseline model loads, ✅ Generates responses, ✅ Memory cleanup works, ✅ Quick evaluation completes
+
+---
+
+### **Phase 2: Core Metrics Implementation (Days 3-4)**
+**Goal**: Implement all evaluation metrics with your baseline model
+
+#### **Phase 2.1: Basic Metrics (Day 3)**
+**Implementation Steps**:
+1. **Multiple choice accuracy**:
+   - A/B/C/D extraction from responses
+   - Exact match scoring
+   - Per-dataset accuracy calculation
+
+2. **Basic generation metrics**:
+   - BLEU score implementation
+   - ROUGE score implementation  
+   - Response length and format validation
+
+3. **Results structure**:
+   - Structured results dictionary
+   - Console output with progress bars
+   - Basic CSV export
+
+**Test Criteria**: ✅ Accuracy calculation works, ✅ BLEU/ROUGE compute correctly, ✅ Results save to CSV
+
+#### **Phase 2.2: Advanced Metrics (Day 4)**
+**Implementation Steps**:
+1. **LLM-as-Judge scoring** (your proven approach):
+   - Arabic evaluation prompt
+   - 1-5 scale scoring
+   - Score extraction with regex
+
+2. **BertScore integration**:
+   - Semantic similarity measurement
+   - Arabic language support
+   - Batch processing for efficiency
+
+3. **NLI consistency checking**:
+   - Entailment score calculation
+   - Logical consistency validation
+   - Reference-prediction comparison
+
+**Test Criteria**: ✅ LLM-Judge scores generated, ✅ BertScore computes, ✅ NLI scores calculated
+
+---
+
+### **Phase 3: Training Progression Analysis (Days 5-6)**
+**Goal**: Evaluate and compare Base → SFT → GRPO progression
+
+#### **Phase 3.1: Multi-Model Framework (Day 5)**
+**Implementation Steps**:
+1. **Sequential model evaluation**:
+   - Load baseline → evaluate → cleanup
+   - Load SFT → evaluate → cleanup  
+   - Load GRPO → evaluate → cleanup
+
+2. **Memory optimization**:
+   - Proper model deletion between evaluations
+   - GPU memory monitoring
+   - Colab-specific optimizations
+
+3. **Progress tracking**:
+   - Model-by-model progress indication
+   - Estimated time remaining
+   - Intermediate result saving
+
+**Test Criteria**: ✅ All 3 models load successfully, ✅ No memory overflow, ✅ Sequential evaluation works
+
+#### **Phase 3.2: Progression Reporting (Day 6)**
+**Implementation Steps**:
+1. **Comparison analysis**:
+   - Base vs SFT improvement calculation
+   - SFT vs GRPO improvement calculation
+   - Statistical significance testing
+
+2. **Visualization generation**:
+   - Bar charts comparing models
+   - Improvement delta plots
+   - Per-metric comparison charts
+
+3. **Detailed reporting**:
+   - Training progression summary
+   - Per-dataset performance breakdown
+   - Export publication-ready tables
+
+**Test Criteria**: ✅ Progression improvements calculated, ✅ Charts generated, ✅ Reports exported
+
+---
+
+### **Phase 4: Comparison Models Integration (Days 7-9)**
+**Goal**: Add and evaluate all comparison models
+
+#### **Phase 4.1: Small Models Integration (Day 7)**
+**Models**: Qwen3-0.6B, Qwen2.5-0.5B, SILMA-2B
+**Implementation Steps**:
+1. **Add models to registry**
+2. **Test memory requirements**
+3. **Validate generation quality**
+4. **Run standard tier evaluation**
+
+**Test Criteria**: ✅ Small models evaluate successfully, ✅ Results comparable to your models
+
+#### **Phase 4.2: Medium Models Integration (Day 8)**
+**Models**: Qwen3-1.7B, Qwen2.5-1.5B, Qwen3-4B, Qwen2.5-3B
+**Implementation Steps**:
+1. **Memory optimization for 3-4B models**
+2. **4-bit quantization implementation**
+3. **Batch evaluation testing**
+4. **Performance comparison**
+**Test Criteria**: ✅ Medium models load with quantization, ✅ Evaluation completes within time limits
+
+#### **Phase 4.3: Large Models Integration (Day 9)**  
+**Models**: SILMA-9B, ALLaM-7B, Jais-13B
+**Implementation Steps**:
+1. **Heavy quantization for 7-13B models**
+2. **Extended timeout handling**
+3. **Memory monitoring and optimization**
+4. **Complete model comparison**
+
+**Test Criteria**: ✅ Large models evaluate successfully, ✅ All 13 models compared
+
+---
+
+### **Phase 5: Advanced Features & Optimization (Days 10-11)**
+**Goal**: Add TIGERScore and optimize for production use
+
+#### **Phase 5.1: TIGERScore Integration (Day 10)**
+**Implementation Steps**:
+1. **TIGERScore model loading** (your Cell 48-53 approach)
+2. **4-bit quantization for TIGERScore-7B**
+3. **Explainable scoring implementation**
+4. **Error analysis integration**
+
+**Test Criteria**: ✅ TIGERScore loads and runs, ✅ Explainable results generated
+
+#### **Phase 5.2: Production Optimization (Day 11)**
+**Implementation Steps**:
+1. **Colab Pro optimization**:
+   - Memory monitoring
+   - Automatic cleanup
+   - Session timeout handling
+
+2. **Checkpointing system**:
+   - Resume from interruption
+   - Incremental result saving
+   - Progress persistence
+
+3. **Error handling**:
+   - Robust model loading
+   - Generation failure recovery
+   - Graceful degradation
+
+**Test Criteria**: ✅ Full evaluation runs without crashes, ✅ Checkpointing works, ✅ Error recovery functional
+
+---
+
+### **Phase 6: Final Integration & Documentation (Day 12)**
+**Goal**: Complete system with documentation and Colab integration
+
+#### **Phase 6.1: Colab Notebook Creation**
+**Files to create**: `colab_evaluation_cells.py`, `EVALUATION_QUICK_START.md`
+
+**Implementation Steps**:
+1. **Ready-to-use Colab cells**:
+   - Setup and installation cell
+   - Model configuration cell
+   - Quick evaluation cell (3-5 min)
+   - Standard evaluation cell (20 min)
+   - Full evaluation cell (60 min)
+   - Results visualization cell
+
+2. **Documentation**:
+   - Quick start guide
+   - Troubleshooting section
+   - Results interpretation guide
+
+**Test Criteria**: ✅ Colab notebook runs end-to-end, ✅ Documentation complete
+
+---
+
+## 📊 **Expected Final Output**
+
+### **Comprehensive Comparison Table**
+```
+Model Category | Model Name    | MMLU  | ACVA  | Reasoning | LLM-Judge | Avg Score
+---------------|---------------|-------|-------|-----------|-----------|----------
+Your Models    | Baseline      | 42.5% | 75.2% | 38.1%     | 3.2       | 51.9%
+Your Models    | SFT           | 55.0% | 81.0% | 48.5%     | 3.8       | 61.5% 
+Your Models    | GRPO          | 58.2% | 85.0% | 52.1%     | 4.1       | 65.1%
+Qwen 3         | 0.6B          | 38.1% | 72.0% | 35.2%     | 3.0       | 48.3%
+Qwen 3         | 1.7B          | 45.2% | 78.5% | 41.8%     | 3.4       | 55.1%
+Qwen 3         | 4B            | 52.8% | 82.1% | 47.9%     | 3.9       | 62.2%
+SILMA          | 2B            | 44.1% | 76.8% | 40.5%     | 3.3       | 54.4%
+SILMA          | 9B            | 56.9% | 84.2% | 50.7%     | 4.0       | 63.9%
+ALLaM          | 7B            | 54.2% | 83.5% | 49.1%     | 3.8       | 62.2%
+Jais           | 13B           | 57.1% | 85.8% | 51.4%     | 4.0       | 64.6%
+```
+
+### **Training Progression Analysis**
+```
+Improvement Analysis:
+- Base → SFT: +9.6% average improvement
+- SFT → GRPO: +3.6% average improvement  
+- Total Improvement: +13.2% over baseline
+
+Your GRPO model ranks #2 overall, outperforming:
+✅ All Qwen 3 models
+✅ SILMA 2B and 9B
+✅ ALLaM 7B
+⚠️ Slightly behind Jais 13B (26x larger)
+```
+
+---
+
+## 🎯 **Implementation Schedule**
+
+| Phase | Days | Focus | Deliverable |
+|-------|------|-------|-------------|
+| 1 | 1-2 | Foundation | Basic evaluation framework |
+| 2 | 3-4 | Core Metrics | All evaluation metrics working |
+| 3 | 5-6 | Your Models | Base→SFT→GRPO comparison |
+| 4 | 7-9 | Comparison Models | All 10 external models evaluated |
+| 5 | 10-11 | Advanced Features | TIGERScore + optimization |
+| 6 | 12 | Integration | Colab notebook + documentation |
+
+**Each phase includes testing and validation before proceeding to the next phase.**
+
+
