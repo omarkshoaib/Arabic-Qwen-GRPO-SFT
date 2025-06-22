@@ -128,12 +128,12 @@ def reward_question_words_not_in_answer(completions, prompts, question_words, pe
     for i, completion in enumerate(completions):
         if not completion:
             scores.append(0)
-            continue
+                continue
             
         # Simple check: if completion ends with '؟', it's a question, so don't penalize
         if completion.strip().endswith("؟"):
             scores.append(0)
-            continue
+                continue
 
         penalty = 0
         for qw in question_words:
@@ -298,7 +298,7 @@ def combined_reward_pipeline(completions, prompts_text, reward_config):
         penalty_value=reward_config.get("think_answer_penalty_value", -1.0),
         order_penalty=reward_config.get("think_answer_order_penalty", -0.5)
     )
-    
+
     for i in range(num_completions):
         total_reward = (
             w["length"] * r_len_scores[i] +
@@ -313,7 +313,7 @@ def combined_reward_pipeline(completions, prompts_text, reward_config):
             total_reward = np.clip(total_reward, cfg["clamp_rewards"]["min"], cfg["clamp_rewards"]["max"])
             
         final_rewards.append(total_reward)
-        
+
     return final_rewards
 
 # Wrapper for GRPOTrainer
@@ -382,8 +382,8 @@ def grpo_reward_function_unsloth(completions, tokenizer, reward_config, **kwargs
     if generated_texts and prompts_text and len(generated_texts) > len(prompts_text):
         if len(generated_texts) % len(prompts_text) == 0:
             num_generations_per_prompt = len(generated_texts) // len(prompts_text)
-    
-    aligned_prompts_text = []
+        
+        aligned_prompts_text = []
     if num_generations_per_prompt > 1:
         for p_text in prompts_text:
             aligned_prompts_text.extend([p_text] * num_generations_per_prompt)

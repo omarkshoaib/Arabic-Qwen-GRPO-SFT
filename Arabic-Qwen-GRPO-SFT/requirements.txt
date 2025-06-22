@@ -11,6 +11,14 @@ scikit-learn
 numpy
 pandas
 
+# For evaluation framework
+sacrebleu>=2.0.0
+rouge-score>=0.0.4
+bert-score>=0.3.13
+evaluate>=0.4.0
+torch
+langdetect
+
 # Optional: for linting/formatting
 # ruff
 # black 
